@@ -12,7 +12,9 @@ class DNSBalancer:
         self.strategy = strategy
         self.rr_index = 0
 
-        self.server_stats = defaultdict(lambda: {"sent": 0, "acked": 0, "rtt_sum": 0.0})
+        self.server_stats = defaultdict(
+            lambda: {"sent": 0, "acked": 0, "rtt_sum": 0.0, "rtt_count": 0}
+        )
 
         self._setup_strategy_dispatch()
 
@@ -26,6 +28,8 @@ class DNSBalancer:
             self._get_servers = self._get_servers_random
         elif self.strategy == 3:
             self._get_servers = self._get_servers_least_loss
+        elif self.strategy == 4:
+            self._get_servers = self._get_servers_lowest_latency
         else:
             self._get_servers = self._get_servers_round_robin
 
@@ -44,9 +48,19 @@ class DNSBalancer:
         self.valid_servers_count = len(self.valid_servers)
         self.rr_index = 0
 
-    # Fast-path updates
-    def report_success(self, server_key: str):
-        self.server_stats[server_key]["acked"] += 1
+    def report_success(self, server_key: str, rtt: float = 0.0):
+        stats = self.server_stats[server_key]
+        stats["acked"] += 1
+
+        if rtt > 0:
+            stats["rtt_sum"] += rtt
+            stats["rtt_count"] += 1
+
+        if stats["sent"] > 1000:
+            stats["sent"] = int(stats["sent"] * 0.5)
+            stats["acked"] = int(stats["acked"] * 0.5)
+            stats["rtt_sum"] *= 0.5
+            stats["rtt_count"] = int(stats["rtt_count"] * 0.5)
 
     def report_send(self, server_key: str):
         self.server_stats[server_key]["sent"] += 1
@@ -59,7 +73,15 @@ class DNSBalancer:
         sent = stats["sent"]
         if sent < 5:
             return 0.5
-        return 1.0 - (stats["acked"] / sent)
+
+        loss = 1.0 - (stats["acked"] / sent)
+        return max(0.0, min(1.0, loss))
+
+    def get_avg_rtt(self, server_key: str) -> float:
+        stats = self.server_stats.get(server_key)
+        if not stats or stats["rtt_count"] < 5:
+            return 999.0
+        return stats["rtt_sum"] / stats["rtt_count"]
 
     def get_best_server(self):
         if not self.valid_servers_count:
@@ -87,6 +109,14 @@ class DNSBalancer:
         scored = sorted(
             self.valid_servers,
             key=lambda s: _get_loss(s["_key"]),
+        )
+        return scored[:count]
+
+    def _get_servers_lowest_latency(self, count: int) -> list:
+        _get_rtt = self.get_avg_rtt
+        scored = sorted(
+            self.valid_servers,
+            key=lambda s: _get_rtt(s["_key"]),
         )
         return scored[:count]
 

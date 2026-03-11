@@ -118,6 +118,7 @@ class MasterDnsVPNClient:
         self.balancer = DNSBalancer(
             resolvers=self.connections_map, strategy=self.resolver_balancing_strategy
         )
+        self.server_rtt_tracker = {}
         self.ping_manager = PingManager(self._send_ping_packet)
         self.packet_duplication_count = self.config.get("PACKET_DUPLICATION_COUNT", 1)
         self.rx_tasks = set()
@@ -226,7 +227,13 @@ class MasterDnsVPNClient:
                 if qname.endswith(self.domains_lower):
                     for d in self.domains_lower:
                         if qname.endswith(d):
-                            self.balancer.report_success(f"{addr[0]}:{d}")
+                            server_key = f"{addr[0]}:{d}"
+                            sent_time = self.server_rtt_tracker.get(server_key, 0.0)
+                            calc_rtt = (
+                                time.monotonic() - sent_time if sent_time > 0.0 else 0.0
+                            )
+
+                            self.balancer.report_success(server_key, rtt=calc_rtt)
                             break
             except Exception:
                 pass
@@ -1956,6 +1963,7 @@ class MasterDnsVPNClient:
             )
 
             for conn in target_conns:
+                self.server_rtt_tracker[conn["_key"]] = time.monotonic()
                 self.balancer.report_send(conn["_key"])
                 query_packets = self.dns_parser.build_request_dns_query(
                     domain=conn["domain"],
