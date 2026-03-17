@@ -3228,12 +3228,10 @@ class MasterDnsVPNClient(PacketQueueMixin):
                             await writer.drain()
 
                             stream_obj = stream_data.get("stream")
-                            if (
-                                stream_obj
-                                and hasattr(stream_obj, "socks_connected")
-                                and not stream_obj.socks_connected.is_set()
+                            if stream_obj and hasattr(
+                                stream_obj, "mark_socks_connected"
                             ):
-                                stream_obj.socks_connected.set()
+                                await stream_obj.mark_socks_connected()
 
                         except Exception as e:
                             self.logger.debug(

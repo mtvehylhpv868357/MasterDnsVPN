@@ -234,6 +234,14 @@ class ARQ:
         if self.state == Stream_State.OPEN:
             self._set_state(Stream_State.HALF_CLOSED_LOCAL)
 
+    async def mark_socks_connected(self) -> None:
+        if self.socks_connected.is_set():
+            return
+
+        self.socks_connected.set()
+        await self._flush_ready_local_data()
+        await self._try_finalize_remote_eof()
+
     # Clear all buffers immediately (RST/abort semantics).
     def _clear_all_queues(self) -> None:
         self.snd_buf.clear()
@@ -445,6 +453,9 @@ class ARQ:
         ):
             return
 
+        if self.is_socks and not self.socks_connected.is_set():
+            return
+
         self._remote_write_closed = True
 
         try:
@@ -474,6 +485,34 @@ class ARQ:
 
         if self._fin_sent and self._fin_acked and not self.snd_buf:
             await self.close(reason="Both FIN sides fully acknowledged")
+
+    async def _flush_ready_local_data(self) -> None:
+        if self.closed or (self.is_socks and not self.socks_connected.is_set()):
+            return
+
+        has_written = False
+        _pop = self.rcv_buf.pop
+        data_to_write = []
+
+        while self.rcv_nxt in self.rcv_buf:
+            try:
+                data_to_write.append(_pop(self.rcv_nxt))
+                has_written = True
+                self.rcv_nxt = (self.rcv_nxt + 1) % 65536
+            except Exception as e:
+                await self.abort(reason=f"RCV Buffer Error: {e}")
+                return
+
+        if not has_written:
+            return
+
+        try:
+            async with self._write_lock:
+                self.writer.write(b"".join(data_to_write))
+                await self.writer.drain()
+        except Exception as e:
+            await self.abort(reason=f"Writer Error: {e}")
+            return
 
     # Periodic scheduler that triggers data/control retransmission checks.
     async def _retransmit_loop(self):
@@ -543,28 +582,7 @@ class ARQ:
         if sn not in self.rcv_buf:
             self.rcv_buf[sn] = data
 
-        has_written = False
-        _write = self.writer.write
-        _pop = self.rcv_buf.pop
-        data_to_write = []
-
-        while self.rcv_nxt in self.rcv_buf:
-            try:
-                data_to_write.append(_pop(self.rcv_nxt))
-                has_written = True
-                self.rcv_nxt = (self.rcv_nxt + 1) % 65536
-            except Exception as e:
-                await self.abort(reason=f"RCV Buffer Error: {e}")
-                return
-
-        if has_written:
-            try:
-                async with self._write_lock:
-                    _write(b"".join(data_to_write))
-                    await self.writer.drain()
-            except Exception as e:
-                await self.abort(reason=f"Writer Error: {e}")
-                return
+        await self._flush_ready_local_data()
 
         await self.enqueue_tx(0, self.stream_id, sn, b"", is_ack=True)
         await self._try_finalize_remote_eof()
