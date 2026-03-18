@@ -134,7 +134,7 @@ func BuildTXTResponsePacket(questionPacket []byte, answerName string, answerPayl
 }
 
 func BuildVPNResponsePacket(questionPacket []byte, answerName string, packet VPNProto.Packet, baseEncode bool) ([]byte, error) {
-	rawFrame, err := VPNProto.BuildRaw(VPNProto.BuildOptions{
+	rawFrame, err := VPNProto.BuildRawAuto(VPNProto.BuildOptions{
 		SessionID:       packet.SessionID,
 		PacketType:      packet.PacketType,
 		SessionCookie:   packet.SessionCookie,
@@ -144,7 +144,7 @@ func BuildVPNResponsePacket(questionPacket []byte, answerName string, packet VPN
 		TotalFragments:  packet.TotalFragments,
 		CompressionType: packet.CompressionType,
 		Payload:         packet.Payload,
-	})
+	}, 100)
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +365,11 @@ func assembleVPNResponse(rawAnswers [][]byte, baseEncoded bool) (VPNProto.Packet
 			}
 			raw = decoded
 		}
-		return VPNProto.Parse(raw)
+		packet, err := VPNProto.Parse(raw)
+		if err != nil {
+			return VPNProto.Packet{}, err
+		}
+		return VPNProto.InflatePayload(packet)
 	}
 
 	var chunks [256][]byte
@@ -441,7 +445,7 @@ func assembleVPNResponse(rawAnswers [][]byte, baseEncoded bool) (VPNProto.Packet
 		payload = append(payload, chunks[i]...)
 	}
 	header.Payload = payload
-	return header, nil
+	return VPNProto.InflatePayload(header)
 }
 
 func encodeDNSNameStrict(name string) ([]byte, error) {

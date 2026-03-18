@@ -259,11 +259,11 @@ func TestHandlePacketNegotiatesUnsupportedCompressionToOff(t *testing.T) {
 		MaxPacketSize:                     65535,
 		Domain:                            []string{"a.com"},
 		MinVPNLabelLength:                 3,
-		SupportedUploadCompressionTypes:   []int{0, 1},
+		SupportedUploadCompressionTypes:   []int{0, 3},
 		SupportedDownloadCompressionTypes: []int{0},
 	}, nil, codec)
 
-	payload := []byte{1, 0x13, 0x00, 0x96, 0x00, 0xC8, 0x44, 0x33, 0x22, 0x11}
+	payload := []byte{1, 0x31, 0x00, 0x96, 0x00, 0xC8, 0x44, 0x33, 0x22, 0x11}
 	query := buildTunnelQueryWithSessionID(t, codec, "a.com", 0, ENUMS.PacketSessionInit, payload)
 	response := srv.handlePacket(query)
 	if len(response) == 0 {
@@ -274,8 +274,8 @@ func TestHandlePacketNegotiatesUnsupportedCompressionToOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExtractVPNResponse returned error: %v", err)
 	}
-	if got := packet.Payload[2]; got != 0x10 {
-		t.Fatalf("unexpected negotiated compression pair: got=%#x want=%#x", got, 0x10)
+	if got := packet.Payload[2]; got != 0x30 {
+		t.Fatalf("unexpected negotiated compression pair: got=%#x want=%#x", got, 0x30)
 	}
 }
 

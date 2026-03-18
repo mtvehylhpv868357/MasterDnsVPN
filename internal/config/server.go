@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"masterdnsvpn-go/internal/compression"
 )
 
 type ServerConfig struct {
@@ -53,8 +55,8 @@ func defaultServerConfig() ServerConfig {
 		DropLogIntervalSecs:               2.0,
 		Domain:                            nil,
 		MinVPNLabelLength:                 3,
-		SupportedUploadCompressionTypes:   []int{0, 1, 2, 3},
-		SupportedDownloadCompressionTypes: []int{0, 1, 2, 3},
+		SupportedUploadCompressionTypes:   []int{0, 3},
+		SupportedDownloadCompressionTypes: []int{0, 3},
 		DataEncryptionMethod:              1,
 		EncryptionKeyFile:                 "encrypt_key.txt",
 		LogLevel:                          "INFO",
@@ -158,7 +160,7 @@ func normalizeCompressionTypeList(values []int) []int {
 	seen := [4]bool{}
 	out := make([]int, 0, len(values))
 	for _, value := range values {
-		if value < 0 || value > 3 || seen[value] {
+		if value < 0 || value > 3 || seen[value] || !compression.IsTypeAvailable(uint8(value)) {
 			continue
 		}
 		seen[value] = true

@@ -256,6 +256,14 @@ func (s *Server) handleTunnelCandidate(packet []byte, parsed DnsParser.LitePacke
 		}
 		return response
 	}
+	vpnPacket, err = VPNProto.InflatePayload(vpnPacket)
+	if err != nil {
+		response, responseErr := DnsParser.BuildEmptyNoErrorResponseFromLite(packet, parsed)
+		if responseErr != nil {
+			return nil
+		}
+		return response
+	}
 
 	switch vpnPacket.PacketType {
 	case ENUMS.PacketSessionInit:
@@ -306,7 +314,7 @@ func (s *Server) handleSessionInitRequest(questionPacket []byte, decision domain
 func buildCompressionMask(values []int) uint8 {
 	var mask uint8 = 1 << compression.TypeOff
 	for _, value := range values {
-		if value < compression.TypeOff || value > compression.TypeZLIB {
+		if value < compression.TypeOff || value > compression.TypeZLIB || !compression.IsTypeAvailable(uint8(value)) {
 			continue
 		}
 		mask |= 1 << uint8(value)

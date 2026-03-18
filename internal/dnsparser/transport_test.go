@@ -12,6 +12,7 @@ import (
 	"errors"
 	"testing"
 
+	"masterdnsvpn-go/internal/compression"
 	ENUMS "masterdnsvpn-go/internal/enums"
 	VPNProto "masterdnsvpn-go/internal/vpnproto"
 )
@@ -137,6 +138,40 @@ func TestBuildAndExtractVPNResponsePacketChunkedBaseEncoded(t *testing.T) {
 	}
 	if !bytes.Equal(packet.Payload, payload) {
 		t.Fatalf("unexpected chunked payload size: got=%d want=%d", len(packet.Payload), len(payload))
+	}
+}
+
+func TestBuildAndExtractVPNResponsePacketCompressed(t *testing.T) {
+	query, err := BuildTXTQuestionPacket("x.v.example.com", ENUMS.DNSRecordTypeTXT, 4096)
+	if err != nil {
+		t.Fatalf("BuildTXTQuestionPacket returned error: %v", err)
+	}
+
+	payload := bytes.Repeat([]byte("abcdabcdabcdabcd"), 16)
+	response, err := BuildVPNResponsePacket(query, "x.v.example.com", VPNProto.Packet{
+		SessionID:       7,
+		PacketType:      ENUMS.PacketStreamData,
+		SessionCookie:   9,
+		StreamID:        1,
+		SequenceNum:     2,
+		FragmentID:      0,
+		TotalFragments:  1,
+		CompressionType: compression.TypeZLIB,
+		Payload:         payload,
+	}, false)
+	if err != nil {
+		t.Fatalf("BuildVPNResponsePacket returned error: %v", err)
+	}
+
+	packet, err := ExtractVPNResponse(response, false)
+	if err != nil {
+		t.Fatalf("ExtractVPNResponse returned error: %v", err)
+	}
+	if packet.PacketType != ENUMS.PacketStreamData {
+		t.Fatalf("unexpected packet type: got=%d want=%d", packet.PacketType, ENUMS.PacketStreamData)
+	}
+	if !bytes.Equal(packet.Payload, payload) {
+		t.Fatal("unexpected inflated payload")
 	}
 }
 

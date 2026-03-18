@@ -13,11 +13,11 @@ func TestPacketEnumValuesAreStable(t *testing.T) {
 	if PacketSessionInit != 0x05 {
 		t.Fatalf("unexpected PacketSessionInit value: got=%#x want=%#x", PacketSessionInit, 0x05)
 	}
-	if PacketStreamData != 0x0D {
-		t.Fatalf("unexpected PacketStreamData value: got=%#x want=%#x", PacketStreamData, 0x0D)
+	if PacketStreamData != 0x0B {
+		t.Fatalf("unexpected PacketStreamData value: got=%#x want=%#x", PacketStreamData, 0x0B)
 	}
-	if PacketDNSQueryReq != 0x31 {
-		t.Fatalf("unexpected PacketDNSQueryReq value: got=%#x want=%#x", PacketDNSQueryReq, 0x31)
+	if PacketDNSQueryReq != 0x2F {
+		t.Fatalf("unexpected PacketDNSQueryReq value: got=%#x want=%#x", PacketDNSQueryReq, 0x2F)
 	}
 	if PacketErrorDrop != 0xFF {
 		t.Fatalf("unexpected PacketErrorDrop value: got=%#x want=%#x", PacketErrorDrop, 0xFF)
