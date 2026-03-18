@@ -79,6 +79,7 @@ func (c *Client) InitializeSession(maxAttempts int) error {
 		c.sessionCookie = packet.Payload[1]
 		c.responseMode = initPayload[0]
 		c.uploadCompression, c.downloadCompression = compression.SplitPair(packet.Payload[2])
+		c.sessionReady = true
 		c.applySessionCompressionPolicy()
 		return nil
 	}

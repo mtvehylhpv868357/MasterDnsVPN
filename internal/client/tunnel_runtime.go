@@ -27,7 +27,7 @@ func (c *Client) dispatchDNSQuery(request *dnsDispatchRequest) (response []byte,
 	if c == nil || request == nil || len(request.Query) == 0 {
 		return nil, ErrTunnelDNSDispatchFailed
 	}
-	if c.sessionID == 0 {
+	if !c.SessionReady() {
 		return nil, ErrSessionInitFailed
 	}
 

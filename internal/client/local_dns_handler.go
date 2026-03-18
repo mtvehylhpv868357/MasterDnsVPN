@@ -12,6 +12,7 @@ import (
 
 	"masterdnsvpn-go/internal/dnscache"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
+	Enums "masterdnsvpn-go/internal/enums"
 )
 
 type dnsDispatchRequest struct {
@@ -54,6 +55,13 @@ func (c *Client) handleDNSQueryPacket(query []byte) ([]byte, *dnsDispatchRequest
 	now := c.now()
 	if cached, ok := c.localDNSCache.GetReady(cacheKey, query, now); ok {
 		c.dnsInflight.Complete(cacheKey)
+		if c.log != nil {
+			c.log.Infof(
+				"📦 <green>Local DNS Cache Hit</green> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow>",
+				metadata.Domain,
+				Enums.DNSRecordTypeName(metadata.QType),
+			)
+		}
 		return cached, nil
 	}
 
@@ -85,6 +93,13 @@ func (c *Client) resolveDNSQueryPacket(query []byte) []byte {
 	now := c.now()
 	inflightEntry, leader := c.dnsInflight.Acquire(dispatch.CacheKey, now)
 	if !leader {
+		if c.log != nil {
+			c.log.Infof(
+				"🧩 <green>Local DNS Inflight Reused</green> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow>",
+				dispatch.Domain,
+				Enums.DNSRecordTypeName(dispatch.QType),
+			)
+		}
 		if c.dnsInflight.Wait(inflightEntry, time.Duration(c.cfg.LocalDNSPendingTimeoutSec*float64(time.Second))) {
 			if cached, ok := c.localDNSCache.GetReady(dispatch.CacheKey, query, c.now()); ok {
 				return cached
@@ -98,10 +113,32 @@ func (c *Client) resolveDNSQueryPacket(query []byte) []byte {
 	if c.stream0Runtime != nil && c.stream0Runtime.IsRunning() {
 		c.stream0Runtime.NotifyDNSActivity()
 	}
+	if c.log != nil {
+		c.log.Infof(
+			"🚇 <green>Local DNS Redirected To Tunnel</green> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow>",
+			dispatch.Domain,
+			Enums.DNSRecordTypeName(dispatch.QType),
+		)
+	}
 
 	tunnelResponse, err := c.dispatchDNSQuery(dispatch)
 	if err == nil && len(tunnelResponse) != 0 {
+		if c.log != nil {
+			c.log.Infof(
+				"✅ <green>Local DNS Resolved</green> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow> <magenta>|</magenta> <blue>Path</blue>: <yellow>Tunnel</yellow>",
+				dispatch.Domain,
+				Enums.DNSRecordTypeName(dispatch.QType),
+			)
+		}
 		return tunnelResponse
+	}
+	if c.log != nil {
+		c.log.Warnf(
+			"⚠️ <yellow>Local DNS Resolve Failed</yellow> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow> <magenta>|</magenta> <blue>Error</blue>: <red>%v</red>",
+			dispatch.Domain,
+			Enums.DNSRecordTypeName(dispatch.QType),
+			err,
+		)
 	}
 	return response
 }

@@ -605,6 +605,17 @@ func (s *Server) handleDNSQueryRequest(questionPacket []byte, parsed DnsParser.L
 		return nil
 	}
 
+	if s.log != nil {
+		s.log.Debugf(
+			"📨 <green>Tunnel DNS Query Received</green> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Frag</blue>: <cyan>%d/%d</cyan> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan>",
+			vpnPacket.SessionID,
+			vpnPacket.SequenceNum,
+			vpnPacket.FragmentID+1,
+			max(1, int(vpnPacket.TotalFragments)),
+			decision.RequestName,
+		)
+	}
+
 	assembledQuery, ready := s.collectDNSQueryFragments(
 		vpnPacket.SessionID,
 		vpnPacket.SequenceNum,
@@ -614,6 +625,15 @@ func (s *Server) handleDNSQueryRequest(questionPacket []byte, parsed DnsParser.L
 		time.Now(),
 	)
 	if !ready {
+		if s.log != nil {
+			s.log.Debugf(
+				"🧩 <green>Tunnel DNS Fragment Buffered</green> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Frag</blue>: <cyan>%d/%d</cyan>",
+				vpnPacket.SessionID,
+				vpnPacket.SequenceNum,
+				vpnPacket.FragmentID+1,
+				max(1, int(vpnPacket.TotalFragments)),
+			)
+		}
 		return buildNoDataResponseLite(questionPacket, parsed)
 	}
 

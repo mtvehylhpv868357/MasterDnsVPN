@@ -35,6 +35,7 @@ type Client struct {
 	dnsInflight      *dnsInflightManager
 
 	successMTUChecks    bool
+	sessionReady        bool
 	sessionID           uint8
 	sessionCookie       uint8
 	responseMode        uint8
@@ -145,6 +146,10 @@ func (c *Client) SessionID() uint8 {
 	return c.sessionID
 }
 
+func (c *Client) SessionReady() bool {
+	return c != nil && c.sessionReady
+}
+
 func (c *Client) SessionCookie() uint8 {
 	return c.sessionCookie
 }
@@ -159,6 +164,7 @@ func (c *Client) MaxPackedBlocks() int {
 func (c *Client) ResetRuntimeState(resetSessionCookie bool) {
 	c.enqueueSeq = 0
 	c.mainSequence = 0
+	c.sessionReady = false
 	c.sessionID = 0
 	if resetSessionCookie {
 		c.sessionCookie = 0

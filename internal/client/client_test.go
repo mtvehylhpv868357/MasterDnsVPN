@@ -60,13 +60,14 @@ func TestBuildConnectionMap(t *testing.T) {
 
 func TestResetRuntimeState(t *testing.T) {
 	c := New(config.ClientConfig{}, nil, nil)
+	c.sessionReady = true
 	c.sessionID = 11
 	c.sessionCookie = 22
 	c.enqueueSeq = 33
 
 	c.ResetRuntimeState(false)
-	if c.sessionID != 0 || c.enqueueSeq != 0 {
-		t.Fatalf("reset should clear session id and enqueue seq: sid=%d enqueue=%d", c.sessionID, c.enqueueSeq)
+	if c.sessionID != 0 || c.enqueueSeq != 0 || c.sessionReady {
+		t.Fatalf("reset should clear session state and enqueue seq: sid=%d enqueue=%d ready=%t", c.sessionID, c.enqueueSeq, c.sessionReady)
 	}
 	if c.sessionCookie != 22 {
 		t.Fatalf("reset without cookie reset should preserve session cookie: got=%d", c.sessionCookie)
@@ -162,6 +163,7 @@ func TestValidateServerPacketAllowsPreSessionResponses(t *testing.T) {
 
 func TestValidateServerPacketRequiresMatchingSessionCookie(t *testing.T) {
 	c := New(config.ClientConfig{}, nil, nil)
+	c.sessionReady = true
 	c.sessionID = 7
 	c.sessionCookie = 55
 
@@ -339,6 +341,7 @@ func TestResolveDNSQueryPacketDedupesInflightDispatch(t *testing.T) {
 	c.rebuildBalancer()
 	c.sessionID = 7
 	c.sessionCookie = 9
+	c.sessionReady = true
 
 	query := buildClientTestDNSQuery(0x1234, "example.com", Enums.DNS_RECORD_TYPE_A, Enums.DNSQ_CLASS_IN)
 	serverFailure, err := DnsParser.BuildServerFailureResponse(query)
@@ -439,6 +442,7 @@ func TestDispatchDNSQueryCachesReadyTunnelResponse(t *testing.T) {
 	c.rebuildBalancer()
 	c.sessionID = 7
 	c.sessionCookie = 9
+	c.sessionReady = true
 	c.responseMode = mtuProbeRawResponse
 
 	rawQuery := buildClientTestDNSQuery(0x1234, "example.com", Enums.DNS_RECORD_TYPE_A, Enums.DNSQ_CLASS_IN)
@@ -535,6 +539,7 @@ func TestDispatchDNSQueryDoesNotCacheServerFailures(t *testing.T) {
 	c.rebuildBalancer()
 	c.sessionID = 7
 	c.sessionCookie = 9
+	c.sessionReady = true
 
 	rawQuery := buildClientTestDNSQuery(0x1234, "example.com", Enums.DNS_RECORD_TYPE_A, Enums.DNSQ_CLASS_IN)
 	serverFailure, err := DnsParser.BuildServerFailureResponse(rawQuery)
@@ -605,6 +610,7 @@ func TestDispatchDNSQuerySplitsLargePayloadAcrossFragments(t *testing.T) {
 	c.rebuildBalancer()
 	c.sessionID = 7
 	c.sessionCookie = 9
+	c.sessionReady = true
 	c.syncedUploadMTU = 20
 
 	rawQuery := buildClientTestDNSQuery(0x1234, "example.com", Enums.DNS_RECORD_TYPE_A, Enums.DNSQ_CLASS_IN)
@@ -727,6 +733,7 @@ func TestStream0RuntimeQueuesPingAfterDNSActivity(t *testing.T) {
 	c.rebuildBalancer()
 	c.sessionID = 7
 	c.sessionCookie = 9
+	c.sessionReady = true
 	c.responseMode = mtuProbeRawResponse
 
 	pingSeen := make(chan struct{}, 1)
@@ -799,6 +806,7 @@ func TestStream0RuntimeRetriesDNSQueryAfterTransientFailure(t *testing.T) {
 	c.rebuildBalancer()
 	c.sessionID = 7
 	c.sessionCookie = 9
+	c.sessionReady = true
 	c.responseMode = mtuProbeRawResponse
 
 	rawQuery := buildClientTestDNSQuery(0x1234, "example.com", Enums.DNS_RECORD_TYPE_A, Enums.DNSQ_CLASS_IN)
@@ -860,6 +868,7 @@ func TestDispatchDNSQueryFailsWithoutValidConnections(t *testing.T) {
 	c := New(config.ClientConfig{}, nil, codec)
 	c.sessionID = 7
 	c.sessionCookie = 9
+	c.sessionReady = true
 
 	_, dispatchErr := c.dispatchDNSQuery(&dnsDispatchRequest{
 		CacheKey: []byte("key"),

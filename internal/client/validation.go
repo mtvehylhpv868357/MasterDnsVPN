@@ -25,7 +25,7 @@ func (c *Client) validateServerPacket(packet VpnProto.Packet) bool {
 	if isPreSessionResponseType(packet.PacketType) {
 		return true
 	}
-	if c == nil || c.sessionID == 0 {
+	if c == nil || !c.sessionReady {
 		return false
 	}
 	return packet.SessionID == c.sessionID && packet.SessionCookie == c.sessionCookie

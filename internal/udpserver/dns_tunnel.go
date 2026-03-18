@@ -65,11 +65,29 @@ func (s *Server) buildDNSQueryResponsePayload(rawQuery []byte, sessionID uint8, 
 	cacheKey := dnscache.BuildKey(parsed.FirstQuestion.Name, parsed.FirstQuestion.Type, parsed.FirstQuestion.Class)
 	now := time.Now()
 	if cached, ok := s.dnsCache.GetReady(cacheKey, rawQuery, now); ok {
+		if s.log != nil {
+			s.log.Debugf(
+				"🧠 <green>Tunnel DNS Cache Hit</green> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan>",
+				parsed.FirstQuestion.Name,
+				Enums.DNSRecordTypeName(parsed.FirstQuestion.Type),
+				sessionID,
+				sequenceNum,
+			)
+		}
 		return cached
 	}
 
 	inflightEntry, leader := s.dnsResolveInflight.Acquire(cacheKey, now)
 	if !leader {
+		if s.log != nil {
+			s.log.Debugf(
+				"🧩 <green>Tunnel DNS Inflight Reused</green> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan>",
+				parsed.FirstQuestion.Name,
+				Enums.DNSRecordTypeName(parsed.FirstQuestion.Type),
+				sessionID,
+				sequenceNum,
+			)
+		}
 		waitTimeout := s.cfg.DNSUpstreamTimeout() * 2
 		if waitTimeout <= 0 {
 			waitTimeout = 8 * time.Second
@@ -88,8 +106,26 @@ func (s *Server) buildDNSQueryResponsePayload(rawQuery []byte, sessionID uint8, 
 	}
 
 	resolved, err := s.resolveDNSUpstream(rawQuery)
+	if s.log != nil {
+		s.log.Debugf(
+			"🔎 <green>Tunnel DNS Upstream Lookup</green> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan>",
+			parsed.FirstQuestion.Name,
+			Enums.DNSRecordTypeName(parsed.FirstQuestion.Type),
+			sessionID,
+			sequenceNum,
+		)
+	}
 	s.dnsResolveInflight.Resolve(cacheKey, resolved)
 	if err != nil || len(resolved) == 0 {
+		if s.log != nil {
+			s.log.Debugf(
+				"⚠️ <yellow>Tunnel DNS Upstream Failed</yellow> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan>",
+				parsed.FirstQuestion.Name,
+				Enums.DNSRecordTypeName(parsed.FirstQuestion.Type),
+				sessionID,
+				sequenceNum,
+			)
+		}
 		response, responseErr := DnsParser.BuildServerFailureResponseFromLite(rawQuery, parsed)
 		if responseErr != nil {
 			return nil
@@ -105,8 +141,16 @@ func (s *Server) buildDNSQueryResponsePayload(rawQuery []byte, sessionID uint8, 
 		resolved,
 		now,
 	)
-	_ = sessionID
-	_ = sequenceNum
+	if s.log != nil {
+		s.log.Debugf(
+			"🌍 <green>Tunnel DNS Resolved Upstream</green> <magenta>|</magenta> <blue>Domain</blue>: <cyan>%s</cyan> <magenta>|</magenta> <blue>Type</blue>: <yellow>%s</yellow> <magenta>|</magenta> <blue>Session</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Seq</blue>: <cyan>%d</cyan> <magenta>|</magenta> <blue>Bytes</blue>: <cyan>%d</cyan>",
+			parsed.FirstQuestion.Name,
+			Enums.DNSRecordTypeName(parsed.FirstQuestion.Type),
+			sessionID,
+			sequenceNum,
+			len(resolved),
+		)
+	}
 	return resolved
 }
 
