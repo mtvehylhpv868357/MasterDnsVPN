@@ -28,6 +28,7 @@ type ClientConfig struct {
 	BaseEncodeData            bool              `toml:"BASE_ENCODE_DATA"`
 	UploadCompressionType     int               `toml:"UPLOAD_COMPRESSION_TYPE"`
 	DownloadCompressionType   int               `toml:"DOWNLOAD_COMPRESSION_TYPE"`
+	CompressionMinSize        int               `toml:"COMPRESSION_MIN_SIZE"`
 	DataEncryptionMethod      int               `toml:"DATA_ENCRYPTION_METHOD"`
 	EncryptionKey             string            `toml:"ENCRYPTION_KEY"`
 	MinUploadMTU              int               `toml:"MIN_UPLOAD_MTU"`
@@ -50,6 +51,7 @@ func defaultClientConfig() ClientConfig {
 		BaseEncodeData:            false,
 		UploadCompressionType:     compression.TypeOff,
 		DownloadCompressionType:   compression.TypeOff,
+		CompressionMinSize:        compression.DefaultMinSize,
 		DataEncryptionMethod:      1,
 		EncryptionKey:             "",
 		MinUploadMTU:              70,
@@ -102,6 +104,9 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 	}
 	if cfg.DownloadCompressionType < compression.TypeOff || cfg.DownloadCompressionType > compression.TypeZLIB {
 		return cfg, fmt.Errorf("invalid DOWNLOAD_COMPRESSION_TYPE: %d", cfg.DownloadCompressionType)
+	}
+	if cfg.CompressionMinSize <= 0 {
+		cfg.CompressionMinSize = compression.DefaultMinSize
 	}
 	if cfg.ResolverBalancingStrategy < 0 || cfg.ResolverBalancingStrategy > 4 {
 		return cfg, fmt.Errorf("invalid RESOLVER_BALANCING_STRATEGY: %d", cfg.ResolverBalancingStrategy)

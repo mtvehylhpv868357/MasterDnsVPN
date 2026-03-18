@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"masterdnsvpn-go/internal/compression"
 	"masterdnsvpn-go/internal/config"
 	"masterdnsvpn-go/internal/logger"
 	"masterdnsvpn-go/internal/security"
@@ -124,6 +125,53 @@ func (c *Client) ResetRuntimeState(resetSessionCookie bool) {
 	c.sessionID = 0
 	if resetSessionCookie {
 		c.sessionCookie = 0
+	}
+}
+
+func (c *Client) applySessionCompressionPolicy() {
+	if c == nil {
+		return
+	}
+
+	minSize := c.cfg.CompressionMinSize
+	if minSize <= 0 {
+		minSize = compression.DefaultMinSize
+	}
+
+	uploadCompression := compression.NormalizeAvailableType(c.uploadCompression)
+	downloadCompression := compression.NormalizeAvailableType(c.downloadCompression)
+
+	if c.syncedUploadMTU > 0 && c.syncedUploadMTU <= minSize {
+		if uploadCompression != compression.TypeOff && c.log != nil {
+			c.log.Infof(
+				"🗜️ <cyan>Session Compression</cyan> <magenta>|</magenta> <blue>Upload</blue>: <yellow>%s</yellow> <red>Disabled</red> <magenta>|</magenta> <blue>MTU</blue>: <cyan>%d</cyan>",
+				compression.TypeName(uploadCompression),
+				c.syncedUploadMTU,
+			)
+		}
+		uploadCompression = compression.TypeOff
+	}
+
+	if c.syncedDownloadMTU > 0 && c.syncedDownloadMTU <= minSize {
+		if downloadCompression != compression.TypeOff && c.log != nil {
+			c.log.Infof(
+				"🗜️ <cyan>Session Compression</cyan> <magenta>|</magenta> <blue>Download</blue>: <yellow>%s</yellow> <red>Disabled</red> <magenta>|</magenta> <blue>MTU</blue>: <cyan>%d</cyan>",
+				compression.TypeName(downloadCompression),
+				c.syncedDownloadMTU,
+			)
+		}
+		downloadCompression = compression.TypeOff
+	}
+
+	c.uploadCompression = uploadCompression
+	c.downloadCompression = downloadCompression
+
+	if c.log != nil {
+		c.log.Infof(
+			"🧩 <cyan>Effective Compression</cyan> <magenta>|</magenta> <blue>Upload</blue>: <yellow>%s</yellow> <magenta>|</magenta> <blue>Download</blue>: <yellow>%s</yellow>",
+			compression.TypeName(c.uploadCompression),
+			compression.TypeName(c.downloadCompression),
+		)
 	}
 }
 

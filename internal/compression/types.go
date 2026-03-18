@@ -76,6 +76,19 @@ func SplitPair(value uint8) (uint8, uint8) {
 	return NormalizeType((value >> 4) & 0x0F), NormalizeType(value & 0x0F)
 }
 
+func TypeName(value uint8) string {
+	switch NormalizeType(value) {
+	case TypeZSTD:
+		return "ZSTD"
+	case TypeLZ4:
+		return "LZ4"
+	case TypeZLIB:
+		return "ZLIB"
+	default:
+		return "OFF"
+	}
+}
+
 func CompressPayload(data []byte, compType uint8, minSize int) ([]byte, uint8) {
 	if len(data) == 0 {
 		return data, TypeOff

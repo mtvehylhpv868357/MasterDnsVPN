@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"masterdnsvpn-go/internal/compression"
 	"masterdnsvpn-go/internal/config"
 	Enums "masterdnsvpn-go/internal/enums"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
@@ -177,5 +178,43 @@ func TestValidateServerPacketRequiresMatchingSessionCookie(t *testing.T) {
 	wrongSession.SessionID = 8
 	if c.validateServerPacket(wrongSession) {
 		t.Fatal("packet with wrong session id should be rejected")
+	}
+}
+
+func TestApplySessionCompressionPolicyDisablesSmallMTUDirections(t *testing.T) {
+	c := New(config.ClientConfig{
+		CompressionMinSize: compression.DefaultMinSize,
+	}, nil, nil)
+	c.syncedUploadMTU = compression.DefaultMinSize
+	c.syncedDownloadMTU = compression.DefaultMinSize - 1
+	c.uploadCompression = compression.TypeZLIB
+	c.downloadCompression = compression.TypeZLIB
+
+	c.applySessionCompressionPolicy()
+
+	if c.uploadCompression != compression.TypeOff {
+		t.Fatalf("upload compression should be disabled, got=%d", c.uploadCompression)
+	}
+	if c.downloadCompression != compression.TypeOff {
+		t.Fatalf("download compression should be disabled, got=%d", c.downloadCompression)
+	}
+}
+
+func TestApplySessionCompressionPolicyKeepsLargeMTUDirections(t *testing.T) {
+	c := New(config.ClientConfig{
+		CompressionMinSize: compression.DefaultMinSize,
+	}, nil, nil)
+	c.syncedUploadMTU = compression.DefaultMinSize + 1
+	c.syncedDownloadMTU = compression.DefaultMinSize + 50
+	c.uploadCompression = compression.TypeZLIB
+	c.downloadCompression = compression.TypeOff
+
+	c.applySessionCompressionPolicy()
+
+	if c.uploadCompression != compression.TypeZLIB {
+		t.Fatalf("upload compression should stay enabled, got=%d", c.uploadCompression)
+	}
+	if c.downloadCompression != compression.TypeOff {
+		t.Fatalf("download compression should stay off, got=%d", c.downloadCompression)
 	}
 }
