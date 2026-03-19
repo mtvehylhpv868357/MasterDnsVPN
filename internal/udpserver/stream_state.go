@@ -26,6 +26,7 @@ type streamStateRecord struct {
 	CreatedAt      time.Time
 	LastActivityAt time.Time
 	LastSequence   uint16
+	OutboundSeq    uint16
 }
 
 type streamStateStore struct {
@@ -126,6 +127,7 @@ func (s *streamStateStore) MarkRemoteFin(sessionID uint8, streamID uint16, seque
 	}
 	record.LastActivityAt = now
 	record.LastSequence = sequenceNum
+	closeWriteConn(record.UpstreamConn)
 	switch record.State {
 	case Enums.STREAM_STATE_HALF_CLOSED_LOCAL:
 		record.State = Enums.STREAM_STATE_DRAINING
@@ -133,6 +135,41 @@ func (s *streamStateStore) MarkRemoteFin(sessionID uint8, streamID uint16, seque
 		record.State = Enums.STREAM_STATE_HALF_CLOSED_REMOTE
 	}
 	return cloneStreamStateRecord(record), true
+}
+
+func (s *streamStateStore) MarkLocalFin(sessionID uint8, streamID uint16, sequenceNum uint16, now time.Time) (*streamStateRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record := s.lookupLocked(sessionID, streamID)
+	if record == nil {
+		return nil, false
+	}
+	record.LastActivityAt = now
+	record.LastSequence = sequenceNum
+	switch record.State {
+	case Enums.STREAM_STATE_HALF_CLOSED_REMOTE:
+		record.State = Enums.STREAM_STATE_DRAINING
+	case Enums.STREAM_STATE_OPEN:
+		record.State = Enums.STREAM_STATE_HALF_CLOSED_LOCAL
+	}
+	return cloneStreamStateRecord(record), true
+}
+
+func (s *streamStateStore) NextOutboundSequence(sessionID uint8, streamID uint16, now time.Time) (uint16, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	record := s.lookupLocked(sessionID, streamID)
+	if record == nil {
+		return 0, false
+	}
+	record.LastActivityAt = now
+	record.OutboundSeq++
+	if record.OutboundSeq == 0 {
+		record.OutboundSeq = 1
+	}
+	return record.OutboundSeq, true
 }
 
 func (s *streamStateStore) MarkReset(sessionID uint8, streamID uint16, sequenceNum uint16, now time.Time) bool {
@@ -201,6 +238,20 @@ func cloneStreamStateRecord(record *streamStateRecord) *streamStateRecord {
 
 func safeCloseConn(conn net.Conn) {
 	if conn == nil {
+		return
+	}
+	_ = conn.Close()
+}
+
+func closeWriteConn(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	type closeWriter interface {
+		CloseWrite() error
+	}
+	if tcpConn, ok := conn.(closeWriter); ok {
+		_ = tcpConn.CloseWrite()
 		return
 	}
 	_ = conn.Close()

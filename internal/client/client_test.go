@@ -11,6 +11,8 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
+	"net"
 	"testing"
 	"time"
 
@@ -968,6 +970,46 @@ func TestOpenSOCKS5StreamReturnsServerError(t *testing.T) {
 	_, err = c.OpenSOCKS5Stream([]byte{0x01, 127, 0, 0, 1, 0x01, 0xBB}, time.Second)
 	if err == nil {
 		t.Fatal("expected handshake error")
+	}
+}
+
+func TestPerformSOCKS5HandshakeParsesConnectRequest(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		defer close(done)
+		payload, err := performSOCKS5Handshake(serverConn)
+		if err != nil {
+			done <- err
+			return
+		}
+		expected := []byte{0x03, 0x0B, 'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm', 0x01, 0xBB}
+		if string(payload) != string(expected) {
+			done <- errors.New("unexpected socks5 payload")
+			return
+		}
+		done <- nil
+	}()
+
+	if _, err := clientConn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	reply := make([]byte, 2)
+	if _, err := io.ReadFull(clientConn, reply); err != nil {
+		t.Fatalf("ReadFull returned error: %v", err)
+	}
+	if string(reply) != string([]byte{0x05, 0x00}) {
+		t.Fatalf("unexpected greeting reply: %v", reply)
+	}
+	request := []byte{0x05, 0x01, 0x00, 0x03, 0x0B, 'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm', 0x01, 0xBB}
+	if _, err := clientConn.Write(request); err != nil {
+		t.Fatalf("Write returned error: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("performSOCKS5Handshake returned error: %v", err)
 	}
 }
 

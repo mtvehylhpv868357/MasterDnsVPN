@@ -9,6 +9,7 @@ package client
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +53,8 @@ type Client struct {
 	exchangeQueryFn func(Connection, []byte, time.Duration) ([]byte, error)
 	fragmentLimits  sync.Map
 	stream0Runtime  *stream0Runtime
+	streamsMu       sync.Mutex
+	streams         map[uint16]*clientStream
 }
 
 type Connection struct {
@@ -63,6 +66,18 @@ type Connection struct {
 	IsValid          bool
 	UploadMTUBytes   int
 	DownloadMTUBytes int
+}
+
+type clientStream struct {
+	mu             sync.Mutex
+	ID             uint16
+	Conn           net.Conn
+	NextSequence   uint16
+	LocalFinSent   bool
+	RemoteFinRecv  bool
+	ResetSent      bool
+	Closed         bool
+	LastActivityAt time.Time
 }
 
 func Bootstrap(configPath string) (*Client, error) {
@@ -98,6 +113,7 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		dnsInflight: newDNSInflightManager(
 			time.Duration(cfg.LocalDNSPendingTimeoutSec * float64(time.Second)),
 		),
+		streams: make(map[uint16]*clientStream, 16),
 	}
 	c.ResetRuntimeState(true)
 	c.uploadCompression = uint8(cfg.UploadCompressionType)
@@ -174,6 +190,9 @@ func (c *Client) ResetRuntimeState(resetSessionCookie bool) {
 	c.responseMode = 0
 	c.maxPackedBlocks = 1
 	c.fragmentLimits = sync.Map{}
+	c.streamsMu.Lock()
+	c.streams = make(map[uint16]*clientStream, 16)
+	c.streamsMu.Unlock()
 }
 
 func (c *Client) updateMaxPackedBlocks() {
@@ -319,4 +338,45 @@ func formatResolverEndpoint(resolver string, port int) string {
 
 func makeConnectionKey(resolver string, port int, domain string) string {
 	return resolver + "|" + strconv.Itoa(port) + "|" + domain
+}
+
+func (c *Client) storeStream(stream *clientStream) {
+	if c == nil || stream == nil {
+		return
+	}
+	c.streamsMu.Lock()
+	c.streams[stream.ID] = stream
+	c.streamsMu.Unlock()
+}
+
+func (c *Client) getStream(streamID uint16) (*clientStream, bool) {
+	if c == nil || streamID == 0 {
+		return nil, false
+	}
+	c.streamsMu.Lock()
+	defer c.streamsMu.Unlock()
+	stream, ok := c.streams[streamID]
+	return stream, ok
+}
+
+func (c *Client) deleteStream(streamID uint16) {
+	if c == nil || streamID == 0 {
+		return
+	}
+	c.streamsMu.Lock()
+	stream := c.streams[streamID]
+	delete(c.streams, streamID)
+	c.streamsMu.Unlock()
+	if stream != nil && stream.Conn != nil {
+		_ = stream.Conn.Close()
+	}
+}
+
+func (c *Client) activeStreamCount() int {
+	if c == nil {
+		return 0
+	}
+	c.streamsMu.Lock()
+	defer c.streamsMu.Unlock()
+	return len(c.streams)
 }

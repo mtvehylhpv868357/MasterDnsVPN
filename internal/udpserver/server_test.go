@@ -443,6 +443,52 @@ func TestHandlePacketRespondsToPingWithPong(t *testing.T) {
 	}
 }
 
+func TestHandlePacketPingReturnsQueuedStreamPacket(t *testing.T) {
+	codec, err := security.NewCodec(0, "")
+	if err != nil {
+		t.Fatalf("NewCodec returned error: %v", err)
+	}
+
+	srv := New(config.ServerConfig{
+		MaxPacketSize:     65535,
+		Domain:            []string{"a.com"},
+		MinVPNLabelLength: 3,
+	}, nil, codec)
+
+	initPayload := []byte{0, 0x00, 0x00, 0x96, 0x00, 0xC8, 0x10, 0x20, 0x30, 0x40}
+	initResponse := srv.handlePacket(buildTunnelQueryWithSessionID(t, codec, "a.com", 0, Enums.PACKET_SESSION_INIT, initPayload))
+	packet, err := DnsParser.ExtractVPNResponse(initResponse, false)
+	if err != nil {
+		t.Fatalf("ExtractVPNResponse returned error: %v", err)
+	}
+
+	sessionID := packet.Payload[0]
+	sessionCookie := packet.Payload[1]
+	srv.streamOutbound.Enqueue(sessionID, VpnProto.Packet{
+		PacketType:  Enums.PACKET_STREAM_DATA,
+		StreamID:    11,
+		SequenceNum: 9,
+		Payload:     []byte("abc"),
+	})
+
+	pingQuery := buildTunnelQueryWithCookie(t, codec, "a.com", sessionID, sessionCookie, Enums.PACKET_PING, []byte("PO:test"))
+	response := srv.handlePacket(pingQuery)
+	if len(response) == 0 {
+		t.Fatal("expected queued stream data response")
+	}
+
+	vpnResponse, err := DnsParser.ExtractVPNResponse(response, false)
+	if err != nil {
+		t.Fatalf("ExtractVPNResponse returned error: %v", err)
+	}
+	if vpnResponse.PacketType != Enums.PACKET_STREAM_DATA {
+		t.Fatalf("unexpected packet type: got=%d want=%d", vpnResponse.PacketType, Enums.PACKET_STREAM_DATA)
+	}
+	if vpnResponse.StreamID != 11 || vpnResponse.SequenceNum != 9 || string(vpnResponse.Payload) != "abc" {
+		t.Fatalf("unexpected queued stream packet: %+v", vpnResponse)
+	}
+}
+
 func TestHandlePacketRespondsToStreamLifecyclePackets(t *testing.T) {
 	codec, err := security.NewCodec(0, "")
 	if err != nil {
@@ -472,6 +518,16 @@ func TestHandlePacketRespondsToStreamLifecyclePackets(t *testing.T) {
 	}
 	if synPacket.PacketType != Enums.PACKET_STREAM_SYN_ACK {
 		t.Fatalf("unexpected syn ack packet type: got=%d want=%d", synPacket.PacketType, Enums.PACKET_STREAM_SYN_ACK)
+	}
+	upstreamConn, peerConn := net.Pipe()
+	defer upstreamConn.Close()
+	defer peerConn.Close()
+	go func() {
+		buffer := make([]byte, 16)
+		_, _ = peerConn.Read(buffer)
+	}()
+	if _, ok := srv.streams.AttachUpstream(sessionID, 9, "127.0.0.1", 80, upstreamConn, time.Now()); !ok {
+		t.Fatal("AttachUpstream returned false")
 	}
 
 	dataQuery := buildTunnelStreamQuery(t, codec, "a.com", sessionID, sessionCookie, Enums.PACKET_STREAM_DATA, 9, 12, []byte("hello"))

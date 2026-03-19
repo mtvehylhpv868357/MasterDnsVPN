@@ -270,7 +270,7 @@ func (r *stream0Runtime) nextPingSchedule(now time.Time) (bool, time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if !r.dnsActivitySeen {
+	if !r.dnsActivitySeen && r.client.activeStreamCount() == 0 {
 		return false, time.Second
 	}
 
@@ -316,6 +316,14 @@ func (r *stream0Runtime) processDequeue(packet arq.QueuedPacket) {
 		r.noteServerDataActivity()
 	case Enums.PACKET_PONG:
 		r.noteServerDataActivity()
+	case Enums.PACKET_STREAM_DATA, Enums.PACKET_STREAM_FIN, Enums.PACKET_STREAM_RST:
+		r.noteServerDataActivity()
+		if err := r.client.handleFollowUpServerPacket(response, time.Second); err != nil && r.client.log != nil {
+			r.client.log.Debugf(
+				"🧵 <yellow>Stream Runtime Packet Handling Failed</yellow> <magenta>|</magenta> <cyan>%v</cyan>",
+				err,
+			)
+		}
 	case 0:
 		if packet.PacketType == Enums.PACKET_DNS_QUERY_REQ {
 			r.scheduleRetry(packet.SequenceNum, ErrTunnelDNSDispatchFailed)

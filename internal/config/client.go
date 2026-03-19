@@ -24,6 +24,10 @@ type ClientConfig struct {
 	ConfigPath                string            `toml:"-"`
 	ProtocolType              string            `toml:"PROTOCOL_TYPE"`
 	Domains                   []string          `toml:"DOMAINS"`
+	LocalSOCKS5Enabled        bool              `toml:"LOCAL_SOCKS5_ENABLED"`
+	LocalSOCKS5IP             string            `toml:"LOCAL_SOCKS5_IP"`
+	LocalSOCKS5Port           int               `toml:"LOCAL_SOCKS5_PORT"`
+	LocalSOCKS5HandshakeSec   float64           `toml:"LOCAL_SOCKS5_HANDSHAKE_TIMEOUT_SECONDS"`
 	LocalDNSEnabled           bool              `toml:"LOCAL_DNS_ENABLED"`
 	LocalDNSIP                string            `toml:"LOCAL_DNS_IP"`
 	LocalDNSPort              int               `toml:"LOCAL_DNS_PORT"`
@@ -58,6 +62,10 @@ func defaultClientConfig() ClientConfig {
 	return ClientConfig{
 		ProtocolType:              "SOCKS5",
 		Domains:                   nil,
+		LocalSOCKS5Enabled:        false,
+		LocalSOCKS5IP:             "127.0.0.1",
+		LocalSOCKS5Port:           1080,
+		LocalSOCKS5HandshakeSec:   10.0,
 		LocalDNSEnabled:           false,
 		LocalDNSIP:                "127.0.0.1",
 		LocalDNSPort:              5353,
@@ -120,6 +128,16 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 
 	if cfg.DataEncryptionMethod < 0 || cfg.DataEncryptionMethod > 5 {
 		return cfg, fmt.Errorf("invalid DATA_ENCRYPTION_METHOD: %d", cfg.DataEncryptionMethod)
+	}
+	cfg.LocalSOCKS5IP = strings.TrimSpace(cfg.LocalSOCKS5IP)
+	if cfg.LocalSOCKS5IP == "" {
+		cfg.LocalSOCKS5IP = "127.0.0.1"
+	}
+	if cfg.LocalSOCKS5Port < 0 || cfg.LocalSOCKS5Port > 65535 {
+		return cfg, fmt.Errorf("invalid LOCAL_SOCKS5_PORT: %d", cfg.LocalSOCKS5Port)
+	}
+	if cfg.LocalSOCKS5HandshakeSec <= 0 {
+		cfg.LocalSOCKS5HandshakeSec = 10.0
 	}
 	cfg.LocalDNSIP = strings.TrimSpace(cfg.LocalDNSIP)
 	if cfg.LocalDNSIP == "" {

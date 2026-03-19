@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"masterdnsvpn-go/internal/client"
@@ -51,6 +52,12 @@ func main() {
 		cfg.LocalDNSPort,
 	)
 	log.Infof(
+		"🧦 <green>Local SOCKS5 Listener</green> <magenta>|</magenta> <blue>Enabled</blue>: <yellow>%t</yellow> <magenta>|</magenta> <blue>Addr</blue>: <cyan>%s:%d</cyan>",
+		cfg.LocalSOCKS5Enabled,
+		cfg.LocalSOCKS5IP,
+		cfg.LocalSOCKS5Port,
+	)
+	log.Infof(
 		"🗂️ <green>Connection Catalog</green> <magenta>|</magenta> <magenta>%d</magenta> <blue>domain-resolver pairs</blue>",
 		len(app.Connections()),
 	)
@@ -82,15 +89,48 @@ func main() {
 	)
 	log.Infof("🎯 <green>Client Bootstrap Ready</green>")
 
-	if !cfg.LocalDNSEnabled {
+	if !cfg.LocalDNSEnabled && !cfg.LocalSOCKS5Enabled {
 		return
 	}
 
 	runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := app.RunLocalDNSListener(runCtx); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Local DNS listener failed: %v\n", err)
+	errCh := make(chan error, 2)
+	var listenersWG sync.WaitGroup
+
+	if cfg.LocalDNSEnabled {
+		listenersWG.Add(1)
+		go func() {
+			defer listenersWG.Done()
+			if err := app.RunLocalDNSListener(runCtx); err != nil {
+				select {
+				case errCh <- fmt.Errorf("local dns listener failed: %w", err):
+				default:
+				}
+				stop()
+			}
+		}()
+	}
+	if cfg.LocalSOCKS5Enabled {
+		listenersWG.Add(1)
+		go func() {
+			defer listenersWG.Done()
+			if err := app.RunLocalSOCKS5Listener(runCtx); err != nil {
+				select {
+				case errCh <- fmt.Errorf("local socks5 listener failed: %w", err):
+				default:
+				}
+				stop()
+			}
+		}()
+	}
+
+	listenersWG.Wait()
+	select {
+	case err := <-errCh:
+		_, _ = fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
+	default:
 	}
 }
