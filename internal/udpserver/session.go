@@ -68,6 +68,7 @@ type sessionValidationResult struct {
 	Lookup sessionLookupResult
 	Known  bool
 	Valid  bool
+	Active *sessionRecord
 }
 
 type sessionStore struct {
@@ -223,6 +224,8 @@ func (s *sessionStore) ValidateAndTouch(sessionID uint8, cookie uint8, now time.
 		}
 		if result.Valid {
 			record.LastActivityAt = now
+			copyRecord := *record
+			result.Active = &copyRecord
 		}
 		return result
 	}
