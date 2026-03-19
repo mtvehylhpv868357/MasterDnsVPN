@@ -36,6 +36,24 @@ func InflatePayload(packet Packet) (Packet, error) {
 	return packet, nil
 }
 
+func ParseInflatedFromLabels(labels string, codec *security.Codec) (Packet, error) {
+	packet, err := ParseFromLabels(labels, codec)
+	if err != nil {
+		return Packet{}, err
+	}
+
+	return InflatePayload(packet)
+}
+
+func ParseInflated(data []byte) (Packet, error) {
+	packet, err := Parse(data)
+	if err != nil {
+		return Packet{}, err
+	}
+
+	return InflatePayload(packet)
+}
+
 func BuildRawAuto(opts BuildOptions, minSize int) ([]byte, error) {
 	payload, compressionType := PreparePayload(opts.PacketType, opts.Payload, opts.CompressionType, minSize)
 	opts.Payload = payload

@@ -37,23 +37,21 @@ func newInvalidCookieTracker() *invalidCookieTracker {
 	}
 }
 
-func (t *invalidCookieTracker) Note(sessionID uint8, expectedCookie *uint8, packetCookie uint8, state sessionLookupState, now time.Time, window time.Duration, threshold int) bool {
-	if t == nil || window <= 0 || threshold <= 0 {
+func (t *invalidCookieTracker) Note(sessionID uint8, lookup sessionLookupResult, known bool, packetCookie uint8, nowUnix int64, windowNanos int64, threshold int) bool {
+	if t == nil || windowNanos <= 0 || threshold <= 0 {
 		return false
 	}
 
 	expected := uint16(unknownExpectedCookieMarker)
-	if expectedCookie != nil {
-		expected = uint16(*expectedCookie)
+	if known {
+		expected = uint16(lookup.Cookie)
 	}
-
-	nowUnix := now.UnixNano()
-	cutoff := now.Add(-window).UnixNano()
+	cutoff := nowUnix - windowNanos
 	key := invalidCookieTrackerKey{
 		sessionID:      sessionID,
 		expectedCookie: expected,
 		packetCookie:   packetCookie,
-		state:          uint8(state),
+		state:          uint8(lookup.State),
 	}
 
 	t.mu.Lock()
@@ -66,7 +64,7 @@ func (t *invalidCookieTracker) Note(sessionID uint8, expectedCookie *uint8, pack
 		t.records[key] = record
 		return false
 	}
-	if record.lastEmitAt != 0 && nowUnix-record.lastEmitAt < window.Nanoseconds() {
+	if record.lastEmitAt != 0 && nowUnix-record.lastEmitAt < windowNanos {
 		t.records[key] = record
 		return false
 	}

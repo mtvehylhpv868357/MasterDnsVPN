@@ -41,33 +41,34 @@ const (
 )
 
 type Server struct {
-	cfg                     config.ServerConfig
-	log                     *logger.Logger
-	codec                   *security.Codec
-	domainMatcher           *domainMatcher.Matcher
-	sessions                *sessionStore
-	streams                 *streamStateStore
-	streamOutbound          *streamOutboundStore
-	invalidCookieTracker    *invalidCookieTracker
-	dnsCache                *dnsCache.Store
-	dnsResolveInflight      *dnsResolveInflightManager
-	dnsUpstreamServers      []string
-	dnsUpstreamBufferPool   sync.Pool
-	dnsFragmentMu           sync.Mutex
-	dnsFragments            map[dnsFragmentKey]*dnsFragmentEntry
-	resolveDNSQueryFn       func([]byte) ([]byte, error)
-	dialStreamUpstreamFn    func(string, string, time.Duration) (net.Conn, error)
-	uploadCompressionMask   uint8
-	downloadCompressionMask uint8
-	dropLogIntervalNanos    int64
-	invalidCookieWindow     time.Duration
-	invalidCookieThreshold  int
-	socksConnectTimeout     time.Duration
-	streamOutboundTTL       time.Duration
-	streamOutboundMaxRetry  int
-	packetPool              sync.Pool
-	droppedPackets          atomic.Uint64
-	lastDropLogUnix         atomic.Int64
+	cfg                      config.ServerConfig
+	log                      *logger.Logger
+	codec                    *security.Codec
+	domainMatcher            *domainMatcher.Matcher
+	sessions                 *sessionStore
+	streams                  *streamStateStore
+	streamOutbound           *streamOutboundStore
+	invalidCookieTracker     *invalidCookieTracker
+	dnsCache                 *dnsCache.Store
+	dnsResolveInflight       *dnsResolveInflightManager
+	dnsUpstreamServers       []string
+	dnsUpstreamBufferPool    sync.Pool
+	dnsFragmentMu            sync.Mutex
+	dnsFragments             map[dnsFragmentKey]*dnsFragmentEntry
+	resolveDNSQueryFn        func([]byte) ([]byte, error)
+	dialStreamUpstreamFn     func(string, string, time.Duration) (net.Conn, error)
+	uploadCompressionMask    uint8
+	downloadCompressionMask  uint8
+	dropLogIntervalNanos     int64
+	invalidCookieWindow      time.Duration
+	invalidCookieWindowNanos int64
+	invalidCookieThreshold   int
+	socksConnectTimeout      time.Duration
+	streamOutboundTTL        time.Duration
+	streamOutboundMaxRetry   int
+	packetPool               sync.Pool
+	droppedPackets           atomic.Uint64
+	lastDropLogUnix          atomic.Int64
 }
 
 type request struct {
@@ -102,14 +103,15 @@ func New(cfg config.ServerConfig, log *logger.Logger, codec *security.Codec) *Se
 		dialStreamUpstreamFn: func(network string, address string, timeout time.Duration) (net.Conn, error) {
 			return net.DialTimeout(network, address, timeout)
 		},
-		uploadCompressionMask:   buildCompressionMask(cfg.SupportedUploadCompressionTypes),
-		downloadCompressionMask: buildCompressionMask(cfg.SupportedDownloadCompressionTypes),
-		dropLogIntervalNanos:    cfg.DropLogInterval().Nanoseconds(),
-		invalidCookieWindow:     cfg.InvalidCookieWindow(),
-		invalidCookieThreshold:  cfg.InvalidCookieErrorThreshold,
-		socksConnectTimeout:     cfg.SOCKSConnectTimeout(),
-		streamOutboundTTL:       cfg.StreamOutboundTTL(),
-		streamOutboundMaxRetry:  cfg.StreamOutboundMaxRetries,
+		uploadCompressionMask:    buildCompressionMask(cfg.SupportedUploadCompressionTypes),
+		downloadCompressionMask:  buildCompressionMask(cfg.SupportedDownloadCompressionTypes),
+		dropLogIntervalNanos:     cfg.DropLogInterval().Nanoseconds(),
+		invalidCookieWindow:      cfg.InvalidCookieWindow(),
+		invalidCookieWindowNanos: cfg.InvalidCookieWindow().Nanoseconds(),
+		invalidCookieThreshold:   cfg.InvalidCookieErrorThreshold,
+		socksConnectTimeout:      cfg.SOCKSConnectTimeout(),
+		streamOutboundTTL:        cfg.StreamOutboundTTL(),
+		streamOutboundMaxRetry:   cfg.StreamOutboundMaxRetries,
 		packetPool: sync.Pool{
 			New: func() any {
 				return make([]byte, cfg.MaxPacketSize)
@@ -211,7 +213,7 @@ func (s *Server) sessionCleanupLoop(ctx context.Context) {
 	}
 	sessionTimeout := s.cfg.SessionTimeout()
 	closedRetention := s.cfg.ClosedSessionRetention()
-	invalidCookieWindow := s.cfg.InvalidCookieWindow()
+	invalidCookieWindow := s.invalidCookieWindow
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -339,14 +341,11 @@ func (s *Server) handlePacket(packet []byte) []byte {
 }
 
 func (s *Server) handleTunnelCandidate(packet []byte, parsed DnsParser.LitePacket, decision domainMatcher.Decision) []byte {
-	vpnPacket, err := VpnProto.ParseFromLabels(decision.Labels, s.codec)
+	vpnPacket, err := VpnProto.ParseInflatedFromLabels(decision.Labels, s.codec)
 	if err != nil {
 		return buildNoDataResponseLite(packet, parsed)
 	}
-	vpnPacket, err = VpnProto.InflatePayload(vpnPacket)
-	if err != nil {
-		return buildNoDataResponseLite(packet, parsed)
-	}
+
 	var sessionRecord *sessionRecord
 	if !isPreSessionRequestType(vpnPacket.PacketType) {
 		now := time.Now()
@@ -355,17 +354,13 @@ func (s *Server) handleTunnelCandidate(packet []byte, parsed DnsParser.LitePacke
 		lookup := validation.Lookup
 		hasExpectedCookie := validation.Known
 		if !validation.Valid {
-			var expectedCookiePtr *uint8
-			if hasExpectedCookie {
-				expectedCookiePtr = &lookup.Cookie
-			}
 			shouldEmit := s.invalidCookieTracker.Note(
 				vpnPacket.SessionID,
-				expectedCookiePtr,
+				lookup,
+				hasExpectedCookie,
 				vpnPacket.SessionCookie,
-				lookup.State,
-				now,
-				s.invalidCookieWindow,
+				now.UnixNano(),
+				s.invalidCookieWindowNanos,
 				s.invalidCookieThreshold,
 			)
 			if shouldEmit {

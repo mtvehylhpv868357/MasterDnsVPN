@@ -365,11 +365,7 @@ func assembleVPNResponse(rawAnswers [][]byte, baseEncoded bool) (VpnProto.Packet
 			}
 			raw = decoded
 		}
-		packet, err := VpnProto.Parse(raw)
-		if err != nil {
-			return VpnProto.Packet{}, err
-		}
-		return VpnProto.InflatePayload(packet)
+		return VpnProto.ParseInflated(raw)
 	}
 
 	var chunks [256][]byte

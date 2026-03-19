@@ -188,10 +188,6 @@ func computeHeaderCheckByte(header []byte) byte {
 	return acc
 }
 
-func isValidPacketType(packetType uint8) bool {
-	return packetFlags[packetType]&packetFlagValid != 0
-}
-
 func hasStreamExtension(packetType uint8) bool {
 	return packetFlags[packetType]&packetFlagStream != 0
 }

@@ -200,14 +200,6 @@ func (s *sessionStore) ExpectedCookie(sessionID uint8) (uint8, bool) {
 	return info.Cookie, true
 }
 
-func (s *sessionStore) ValidateCookie(sessionID uint8, cookie uint8) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	record := s.byID[sessionID]
-	return record != nil && record.Cookie == cookie
-}
-
 func (s *sessionStore) ValidateAndTouch(sessionID uint8, cookie uint8, now time.Time) sessionValidationResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
