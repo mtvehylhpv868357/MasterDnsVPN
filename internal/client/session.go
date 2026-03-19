@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"time"
 
 	"masterdnsvpn-go/internal/compression"
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
@@ -58,7 +57,7 @@ func (c *Client) InitializeSession(maxAttempts int) error {
 			continue
 		}
 
-		response, err := exchangeUDPQuery(transport, query, time.Duration(c.cfg.MTUTestTimeout*float64(time.Second)))
+		response, err := exchangeUDPQuery(transport, query, c.mtuTestTimeout)
 		_ = transport.conn.Close()
 		if err != nil {
 			c.SetConnectionValidity(conn.Key, false)

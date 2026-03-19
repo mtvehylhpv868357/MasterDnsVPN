@@ -63,6 +63,8 @@ type Client struct {
 	stream0Runtime      *stream0Runtime
 	streamsMu           sync.RWMutex
 	streams             map[uint16]*clientStream
+	mtuTestRetries      int
+	mtuTestTimeout      time.Duration
 	streamTXWindow      int
 	streamTXQueueLimit  int
 	streamTXMaxRetries  int
@@ -161,6 +163,8 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		),
 		localDNSFragTTL:    time.Duration(cfg.LocalDNSFragmentTimeoutSec * float64(time.Second)),
 		streams:            make(map[uint16]*clientStream, 16),
+		mtuTestRetries:     cfg.MTUTestRetries,
+		mtuTestTimeout:     time.Duration(cfg.MTUTestTimeout * float64(time.Second)),
 		streamTXWindow:     cfg.StreamTXWindow,
 		streamTXQueueLimit: cfg.StreamTXQueueLimit,
 		streamTXMaxRetries: cfg.StreamTXMaxRetries,
@@ -169,12 +173,23 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		resolverRecheck:    make(map[string]resolverRecheckState, len(cfg.Domains)*len(cfg.Resolvers)),
 		runtimeDisabled:    make(map[string]resolverDisabledState, len(cfg.Domains)*len(cfg.Resolvers)),
 	}
+
 	if c.localDNSCacheFlushTick <= 0 {
 		c.localDNSCacheFlushTick = time.Minute
 	}
+
 	if c.localDNSFragTTL <= 0 {
 		c.localDNSFragTTL = 5 * time.Minute
 	}
+
+	if c.mtuTestRetries < 1 {
+		c.mtuTestRetries = 1
+	}
+
+	if c.mtuTestTimeout <= 0 {
+		c.mtuTestTimeout = time.Second
+	}
+
 	c.ResetRuntimeState(true)
 	c.uploadCompression = uint8(cfg.UploadCompressionType)
 	c.downloadCompression = uint8(cfg.DownloadCompressionType)

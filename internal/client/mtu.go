@@ -13,7 +13,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"sync"
-	"time"
 
 	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
@@ -31,10 +30,7 @@ const (
 	defaultUploadMaxCap = 512
 )
 
-type MTUResult struct {
-	UploadBytes   int
-	DownloadBytes int
-}
+const mtuProbeFillPattern = "MasterDnsVPN-MTU-Probe-Fill-Pattern-2026"
 
 func (c *Client) RunInitialMTUTests() error {
 	if len(c.connections) == 0 {
@@ -51,14 +47,12 @@ func (c *Client) RunInitialMTUTests() error {
 		jobs := make(chan int, len(c.connections))
 		var wg sync.WaitGroup
 		for range workerCount {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				for idx := range jobs {
 					conn := &c.connections[idx]
 					c.safeRunConnectionMTUTest(conn, uploadCaps[conn.Domain])
 				}
-			}()
+			})
 		}
 		for idx := range c.connections {
 			jobs <- idx
@@ -67,22 +61,16 @@ func (c *Client) RunInitialMTUTests() error {
 		wg.Wait()
 	}
 
-	validCount := 0
-	for _, conn := range c.connections {
-		if conn.IsValid {
-			validCount++
-		}
-	}
-
 	c.balancer.RefreshValidConnections()
+	validCount, minUpload, minDownload, minUploadChars := summarizeConnectionMTUStats(c.connections, c)
 	if validCount == 0 {
 		return ErrNoValidConnections
 	}
 
 	c.successMTUChecks = true
-	c.syncedUploadMTU = minConnectionMTU(c.connections, true)
-	c.syncedDownloadMTU = minConnectionMTU(c.connections, false)
-	c.syncedUploadChars = minConnectionUploadChars(c.connections, c)
+	c.syncedUploadMTU = minUpload
+	c.syncedDownloadMTU = minDownload
+	c.syncedUploadChars = minUploadChars
 	c.initResolverRecheckMeta()
 	c.updateMaxPackedBlocks()
 	return nil
@@ -194,21 +182,15 @@ func (c *Client) binarySearchMTU(minValue, maxValue int, testFn func(int) (bool,
 		return 0
 	}
 
-	cache := make(map[int]bool, 8)
 	check := func(value int) bool {
-		if cached, ok := cache[value]; ok {
-			return cached
-		}
-
 		ok := false
-		for attempt := 0; attempt < max(1, c.cfg.MTUTestRetries); attempt++ {
+		for attempt := 0; attempt < c.mtuTestRetries; attempt++ {
 			passed, err := testFn(value)
 			if err == nil && passed {
 				ok = true
 				break
 			}
 		}
-		cache[value] = ok
 		return ok
 	}
 
@@ -242,20 +224,9 @@ func (c *Client) sendUploadMTUProbe(conn *Connection, probeTransport *udpQueryTr
 		return false, nil
 	}
 
-	payload := make([]byte, mtuSize)
-	payload[0] = mtuProbeRawResponse
-	if c.cfg.BaseEncodeData {
-		payload[0] = mtuProbeBase64Reply
-	}
-	code, err := randomBytes(mtuProbeCodeLength)
+	payload, code, useBase64, err := c.buildMTUProbePayload(mtuSize, 0)
 	if err != nil {
 		return false, err
-	}
-	copy(payload[1:1+mtuProbeCodeLength], code)
-	if len(payload) > 1+mtuProbeCodeLength {
-		if _, err := rand.Read(payload[1+mtuProbeCodeLength:]); err != nil {
-			return false, err
-		}
 	}
 
 	query, err := c.buildMTUProbeQuery(conn.Domain, Enums.PACKET_MTU_UP_REQ, payload)
@@ -263,12 +234,12 @@ func (c *Client) sendUploadMTUProbe(conn *Connection, probeTransport *udpQueryTr
 		return false, nil
 	}
 
-	response, err := exchangeUDPQuery(probeTransport, query, time.Duration(c.cfg.MTUTestTimeout*float64(time.Second)))
+	response, err := exchangeUDPQuery(probeTransport, query, c.mtuTestTimeout)
 	if err != nil {
 		return false, nil
 	}
 
-	packet, err := DnsParser.ExtractVPNResponse(response, payload[0] == mtuProbeBase64Reply)
+	packet, err := DnsParser.ExtractVPNResponse(response, useBase64)
 	if err != nil {
 		return false, nil
 	}
@@ -293,34 +264,23 @@ func (c *Client) sendDownloadMTUProbe(conn *Connection, probeTransport *udpQuery
 	}
 
 	requestLen := max(1+mtuProbeCodeLength+2, uploadMTU)
-	payload := make([]byte, requestLen)
-	payload[0] = mtuProbeRawResponse
-	if c.cfg.BaseEncodeData {
-		payload[0] = mtuProbeBase64Reply
-	}
-	code, err := randomBytes(mtuProbeCodeLength)
+	payload, code, useBase64, err := c.buildMTUProbePayload(requestLen, 2)
 	if err != nil {
 		return false, err
 	}
-	copy(payload[1:1+mtuProbeCodeLength], code)
 	binary.BigEndian.PutUint16(payload[1+mtuProbeCodeLength:1+mtuProbeCodeLength+2], uint16(mtuSize))
-	if len(payload) > 1+mtuProbeCodeLength+2 {
-		if _, err := rand.Read(payload[1+mtuProbeCodeLength+2:]); err != nil {
-			return false, err
-		}
-	}
 
 	query, err := c.buildMTUProbeQuery(conn.Domain, Enums.PACKET_MTU_DOWN_REQ, payload)
 	if err != nil {
 		return false, nil
 	}
 
-	response, err := exchangeUDPQuery(probeTransport, query, time.Duration(c.cfg.MTUTestTimeout*float64(time.Second)))
+	response, err := exchangeUDPQuery(probeTransport, query, c.mtuTestTimeout)
 	if err != nil {
 		return false, nil
 	}
 
-	packet, err := DnsParser.ExtractVPNResponse(response, payload[0] == mtuProbeBase64Reply)
+	packet, err := DnsParser.ExtractVPNResponse(response, useBase64)
 	if err != nil {
 		return false, nil
 	}
@@ -400,6 +360,43 @@ func (c *Client) canBuildUploadPayload(domain string, payloadLen int) bool {
 	return err == nil
 }
 
+func (c *Client) buildMTUProbePayload(length int, reservedTailPrefix int) ([]byte, []byte, bool, error) {
+	if length <= 0 {
+		return nil, nil, false, nil
+	}
+
+	payload := make([]byte, length)
+	useBase64 := c != nil && c.cfg.BaseEncodeData
+	payload[0] = mtuProbeRawResponse
+	if useBase64 {
+		payload[0] = mtuProbeBase64Reply
+	}
+
+	code, err := randomBytes(mtuProbeCodeLength)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	copy(payload[1:1+mtuProbeCodeLength], code)
+
+	fillOffset := 1 + mtuProbeCodeLength + reservedTailPrefix
+	if fillOffset < len(payload) {
+		fillMTUProbeBytes(payload[fillOffset:])
+	}
+
+	return payload, code, useBase64, nil
+}
+
+func fillMTUProbeBytes(dst []byte) {
+	if len(dst) == 0 {
+		return
+	}
+	pattern := mtuProbeFillPattern
+	offset := 0
+	for offset < len(dst) {
+		offset += copy(dst[offset:], pattern)
+	}
+}
+
 func randomBytes(length int) ([]byte, error) {
 	if length <= 0 {
 		return []byte{}, nil
@@ -411,41 +408,28 @@ func randomBytes(length int) ([]byte, error) {
 	return buf, nil
 }
 
-func minConnectionMTU(connections []Connection, upload bool) int {
-	best := 0
+func summarizeConnectionMTUStats(connections []Connection, c *Client) (validCount int, minUpload int, minDownload int, minUploadChars int) {
 	for _, conn := range connections {
 		if !conn.IsValid {
 			continue
 		}
-		value := conn.DownloadMTUBytes
-		if upload {
-			value = conn.UploadMTUBytes
-		}
-		if value <= 0 {
-			continue
-		}
-		if best == 0 || value < best {
-			best = value
-		}
-	}
-	return best
-}
+		validCount++
 
-func minConnectionUploadChars(connections []Connection, c *Client) int {
-	best := 0
-	for _, conn := range connections {
-		if !conn.IsValid || conn.UploadMTUBytes <= 0 {
+		if conn.UploadMTUBytes > 0 && (minUpload == 0 || conn.UploadMTUBytes < minUpload) {
+			minUpload = conn.UploadMTUBytes
+		}
+		if conn.DownloadMTUBytes > 0 && (minDownload == 0 || conn.DownloadMTUBytes < minDownload) {
+			minDownload = conn.DownloadMTUBytes
+		}
+		if conn.UploadMTUBytes <= 0 || c == nil {
 			continue
 		}
 		value := c.encodedCharsForPayload(conn.UploadMTUBytes)
-		if value <= 0 {
-			continue
-		}
-		if best == 0 || value < best {
-			best = value
+		if value > 0 && (minUploadChars == 0 || value < minUploadChars) {
+			minUploadChars = value
 		}
 	}
-	return best
+	return validCount, minUpload, minDownload, minUploadChars
 }
 
 func (c *Client) encodedCharsForPayload(payloadLen int) int {
