@@ -131,7 +131,6 @@ func TestLoadClientConfigAppliesDefaultsAndClamps(t *testing.T) {
 PROTOCOL_TYPE = "tcp"
 DOMAINS = ["v.domain.com"]
 LISTEN_IP = "  "
-LOCAL_SOCKS5_IP = " "
 LOCAL_DNS_IP = ""
 LOCAL_DNS_WORKERS = 0
 LOCAL_DNS_QUEUE_SIZE = 0
@@ -169,9 +168,6 @@ ENCRYPTION_KEY = "secret"
 	if cfg.ListenIP != "127.0.0.1" {
 		t.Fatalf("unexpected default listen ip: got=%q want=%q", cfg.ListenIP, "127.0.0.1")
 	}
-	if cfg.LocalSOCKS5IP != "127.0.0.1" {
-		t.Fatalf("unexpected default local socks5 ip: got=%q want=%q", cfg.LocalSOCKS5IP, "127.0.0.1")
-	}
 	if cfg.LocalDNSIP != "127.0.0.1" {
 		t.Fatalf("unexpected default local dns ip: got=%q want=%q", cfg.LocalDNSIP, "127.0.0.1")
 	}
@@ -196,8 +192,8 @@ ENCRYPTION_KEY = "secret"
 	if cfg.MTUServersFileName != "masterdnsvpn_success_test_{time}.log" || cfg.MTUServersFileFormat != "{IP} - UP: {UP_MTU} DOWN: {DOWN-MTU}" {
 		t.Fatalf("unexpected mtu file defaults: file=%q format=%q", cfg.MTUServersFileName, cfg.MTUServersFileFormat)
 	}
-	if cfg.LocalSOCKS5Enabled {
-		t.Fatal("tcp mode should disable local socks5 listener")
+	if cfg.ProtocolType != "TCP" {
+		t.Fatal("tcp mode should be loaded")
 	}
 }
 

@@ -18,27 +18,23 @@ PROTOCOL_TYPE = "SOCKS5"
 DOMAINS = ["v.domain.com"]
 
 # ------------------------------------------------------------------------------
-# 2) Local TCP Mode
+# 2) Local Listener (SOCKS5 or TCP Forwarding)
 # ------------------------------------------------------------------------------
 
+# The IP and Port the client will listen on.
+# - If PROTOCOL_TYPE = "SOCKS5", this acts as a SOCKS5 proxy server.
+# - If PROTOCOL_TYPE = "TCP", this acts as a raw TCP port forwarder.
 LISTEN_IP = "127.0.0.1"
 LISTEN_PORT = 1080
 
-# ------------------------------------------------------------------------------
-# 3) Local SOCKS5 Listener
-# ------------------------------------------------------------------------------
-
-LOCAL_SOCKS5_ENABLED = false
-LOCAL_SOCKS5_IP = "127.0.0.1"
-LOCAL_SOCKS5_PORT = 1080
+# SOCKS5 Specific Settings:
 LOCAL_SOCKS5_HANDSHAKE_TIMEOUT_SECONDS = 10.0
-
 SOCKS5_AUTH = false
 SOCKS5_USER = ""
 SOCKS5_PASS = ""
 
 # ------------------------------------------------------------------------------
-# 4) Local DNS Listener & Cache
+# 3) Local DNS Listener & Cache
 # ------------------------------------------------------------------------------
 
 LOCAL_DNS_ENABLED = false
@@ -55,7 +51,7 @@ LOCAL_DNS_CACHE_PERSIST_TO_FILE = true
 LOCAL_DNS_CACHE_FLUSH_INTERVAL_SECONDS = 60.0
 
 # ------------------------------------------------------------------------------
-# 5) Resolver Selection & Health
+# 4) Resolver Selection & Health
 # ------------------------------------------------------------------------------
 
 # Resolver balancing strategy:
@@ -85,7 +81,7 @@ STREAM_RESOLVER_FAILOVER_RESEND_THRESHOLD = 2
 STREAM_RESOLVER_FAILOVER_COOLDOWN = 1.0
 
 # ------------------------------------------------------------------------------
-# 6) Stream & Control Queue Limits
+# 5) Stream & Control Queue Limits
 # ------------------------------------------------------------------------------
 
 # Hard cap for how many small control packets may be packed into one block.
@@ -99,7 +95,7 @@ STREAM_TX_MAX_RETRIES = 24
 STREAM_TX_TTL_SECONDS = 120.0
 
 # ------------------------------------------------------------------------------
-# 7) Encoding, Compression & Encryption
+# 6) Encoding, Compression & Encryption
 # ------------------------------------------------------------------------------
 
 # If true, MTU test responses request Base64 TXT payloads from server.
@@ -121,7 +117,7 @@ DATA_ENCRYPTION_METHOD = 1
 ENCRYPTION_KEY = ""
 
 # ------------------------------------------------------------------------------
-# 8) Initial MTU Sync
+# 7) Initial MTU Sync
 # ------------------------------------------------------------------------------
 
 MIN_UPLOAD_MTU = 70
@@ -147,12 +143,8 @@ MTU_SERVERS_FILE_FORMAT = "{IP} - UP: {UP_MTU} DOWN: {DOWN-MTU}"
 # Optional text appended once after initial MTU scan is finished.
 MTU_USING_SECTION_SEPARATOR_TEXT = "---- Active MTU Testing Results ----"
 
-# Legacy aliases still work too:
-# MTU_REMOVED_SERVER_LOG_FORMAT
-# MTU_ADDED_SERVER_LOG_FORMAT
-
 # ------------------------------------------------------------------------------
-# 9) Logging
+# 8) Logging
 # ------------------------------------------------------------------------------
 
 LOG_LEVEL = "INFO"

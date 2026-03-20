@@ -28,17 +28,17 @@ type socks5HandshakeRequest struct {
 }
 
 func (c *Client) RunLocalSOCKS5Listener(ctx context.Context) error {
-	if c == nil || !c.cfg.LocalSOCKS5Enabled {
+	if c == nil {
 		return nil
 	}
 	return c.runLocalTCPAcceptLoop(
 		ctx,
-		net.JoinHostPort(c.cfg.LocalSOCKS5IP, strconv.Itoa(c.cfg.LocalSOCKS5Port)),
+		net.JoinHostPort(c.cfg.ListenIP, strconv.Itoa(c.cfg.ListenPort)),
 		func() {
 			c.log.Infof(
 				"\U0001F9E6 <green>Local SOCKS5 Listener Ready</green> <magenta>|</magenta> <blue>Addr</blue>: <cyan>%s:%d</cyan>",
-				c.cfg.LocalSOCKS5IP,
-				c.cfg.LocalSOCKS5Port,
+				c.cfg.ListenIP,
+				c.cfg.ListenPort,
 			)
 		},
 		c.handleLocalSOCKS5Conn,
@@ -285,7 +285,7 @@ func (c *Client) runLocalSOCKS5UDPAssociate(conn net.Conn) error {
 	}
 
 	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{
-		IP:   net.ParseIP(c.cfg.LocalSOCKS5IP),
+		IP:   net.ParseIP(c.cfg.ListenIP),
 		Port: 0,
 	})
 	if err != nil {

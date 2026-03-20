@@ -26,9 +26,6 @@ type ClientConfig struct {
 	Domains                               []string          `toml:"DOMAINS"`
 	ListenIP                              string            `toml:"LISTEN_IP"`
 	ListenPort                            int               `toml:"LISTEN_PORT"`
-	LocalSOCKS5Enabled                    bool              `toml:"LOCAL_SOCKS5_ENABLED"`
-	LocalSOCKS5IP                         string            `toml:"LOCAL_SOCKS5_IP"`
-	LocalSOCKS5Port                       int               `toml:"LOCAL_SOCKS5_PORT"`
 	LocalSOCKS5HandshakeSec               float64           `toml:"LOCAL_SOCKS5_HANDSHAKE_TIMEOUT_SECONDS"`
 	SOCKS5Auth                            bool              `toml:"SOCKS5_AUTH"`
 	SOCKS5User                            string            `toml:"SOCKS5_USER"`
@@ -94,9 +91,6 @@ func defaultClientConfig() ClientConfig {
 		Domains:                               nil,
 		ListenIP:                              "127.0.0.1",
 		ListenPort:                            1080,
-		LocalSOCKS5Enabled:                    false,
-		LocalSOCKS5IP:                         "127.0.0.1",
-		LocalSOCKS5Port:                       1080,
 		LocalSOCKS5HandshakeSec:               10.0,
 		SOCKS5Auth:                            false,
 		SOCKS5User:                            "",
@@ -194,22 +188,6 @@ func LoadClientConfig(filename string) (ClientConfig, error) {
 
 	if cfg.ListenPort < 0 || cfg.ListenPort > 65535 {
 		return cfg, fmt.Errorf("invalid LISTEN_PORT: %d", cfg.ListenPort)
-	}
-
-	cfg.LocalSOCKS5IP = defaultString(strings.TrimSpace(cfg.LocalSOCKS5IP), "127.0.0.1")
-
-	if cfg.LocalSOCKS5Port < 0 || cfg.LocalSOCKS5Port > 65535 {
-		return cfg, fmt.Errorf("invalid LOCAL_SOCKS5_PORT: %d", cfg.LocalSOCKS5Port)
-	}
-
-	switch cfg.ProtocolType {
-	case "SOCKS5":
-		if !cfg.LocalSOCKS5Enabled {
-			cfg.LocalSOCKS5IP = cfg.ListenIP
-			cfg.LocalSOCKS5Port = cfg.ListenPort
-		}
-	case "TCP":
-		cfg.LocalSOCKS5Enabled = false
 	}
 
 	cfg.LocalSOCKS5HandshakeSec = defaultFloatAtMostZero(cfg.LocalSOCKS5HandshakeSec, 10.0)

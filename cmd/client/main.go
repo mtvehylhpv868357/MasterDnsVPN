@@ -26,15 +26,12 @@ func exitWithStderrf(format string, args ...any) {
 	os.Exit(1)
 }
 
-func enabledClientListenerCount(localDNSEnabled bool, localSOCKS5Enabled bool, protocolType string) int {
+func enabledClientListenerCount(localDNSEnabled bool, protocolType string) int {
 	count := 0
 	if localDNSEnabled {
 		count++
 	}
-	if localSOCKS5Enabled {
-		count++
-	}
-	if protocolType == "TCP" {
+	if protocolType == "SOCKS5" || protocolType == "TCP" {
 		count++
 	}
 	return count
@@ -98,15 +95,11 @@ func main() {
 				cfg.ListenIP,
 				cfg.ListenPort,
 			)
-		} else if cfg.LocalSOCKS5Enabled {
+		} else if cfg.ProtocolType == "SOCKS5" {
 			log.Infof(
 				"\U0001F9E6 <green>Local SOCKS5 Listener Addr: <cyan>%s:%d</cyan></green>",
-				cfg.LocalSOCKS5IP,
-				cfg.LocalSOCKS5Port,
-			)
-		} else {
-			log.Infof(
-				"\U0001F9E6 <yellow>Local SOCKS5 Listener Disabled</yellow>",
+				cfg.ListenIP,
+				cfg.ListenPort,
 			)
 		}
 
@@ -155,7 +148,7 @@ func main() {
 		return
 	}
 
-	if !cfg.LocalDNSEnabled && !cfg.LocalSOCKS5Enabled && cfg.ProtocolType != "TCP" {
+	if !cfg.LocalDNSEnabled && cfg.ProtocolType != "SOCKS5" && cfg.ProtocolType != "TCP" {
 		notifySessionClose()
 		stop()
 		select {
@@ -168,17 +161,16 @@ func main() {
 		return
 	}
 
-	enabledListeners := enabledClientListenerCount(cfg.LocalDNSEnabled, cfg.LocalSOCKS5Enabled, cfg.ProtocolType)
+	enabledListeners := enabledClientListenerCount(cfg.LocalDNSEnabled, cfg.ProtocolType)
 	errCh := make(chan error, enabledListeners+1)
 	var listenersWG sync.WaitGroup
 
 	if cfg.LocalDNSEnabled {
 		startClientListener(&listenersWG, errCh, stop, "local dns listener", runCtx, app.RunLocalDNSListener)
 	}
-	if cfg.LocalSOCKS5Enabled {
+	if cfg.ProtocolType == "SOCKS5" {
 		startClientListener(&listenersWG, errCh, stop, "local socks5 listener", runCtx, app.RunLocalSOCKS5Listener)
-	}
-	if cfg.ProtocolType == "TCP" {
+	} else if cfg.ProtocolType == "TCP" {
 		startClientListener(&listenersWG, errCh, stop, "local tcp listener", runCtx, app.RunLocalTCPListener)
 	}
 
