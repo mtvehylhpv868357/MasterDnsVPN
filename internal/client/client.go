@@ -97,8 +97,8 @@ type Client struct {
 	healthRuntimeRun                      bool
 	recheckConnectionFn                   func(*Connection) bool
 
-	reconnectSignal     chan struct{}
-	reconnectPending    atomic.Bool
+	sessionResetSignal  chan struct{}
+	sessionResetPending atomic.Bool
 	initStateMu         sync.Mutex
 	sessionInitPayload  []byte
 	sessionInitVerify   [4]byte
@@ -110,7 +110,7 @@ type Client struct {
 	resolverConnsMu sync.Mutex
 	resolverConns   map[string]chan *net.UDPConn
 
-	udpBufferPool sync.Pool
+	udpBufferPool   sync.Pool
 	mtuProbeCounter atomic.Uint64
 }
 
@@ -244,7 +244,7 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		resolverHealth:            make(map[string]*resolverHealthState, len(cfg.Domains)*len(cfg.Resolvers)),
 		resolverRecheck:           make(map[string]resolverRecheckState, len(cfg.Domains)*len(cfg.Resolvers)),
 		runtimeDisabled:           make(map[string]resolverDisabledState, len(cfg.Domains)*len(cfg.Resolvers)),
-		reconnectSignal:           make(chan struct{}, 1),
+		sessionResetSignal:        make(chan struct{}, 1),
 		resolverConns:             make(map[string]chan *net.UDPConn),
 		udpBufferPool: sync.Pool{
 			New: func() any {
@@ -388,15 +388,20 @@ func (c *Client) ResetRuntimeState(resetSessionCookie bool) {
 	c.clearSessionInitBusyUntil()
 
 	c.resolverConnsMu.Lock()
-	for key, pool := range c.resolverConns {
-		close(pool)
-		for conn := range pool {
-			if conn != nil {
-				_ = conn.Close()
+	for _, pool := range c.resolverConns {
+		for {
+			select {
+			case conn := <-pool:
+				if conn != nil {
+					_ = conn.Close()
+				}
+			default:
+				goto nextPool
 			}
 		}
-		delete(c.resolverConns, key)
+	nextPool:
 	}
+	c.resolverConns = make(map[string]chan *net.UDPConn)
 	c.resolverConnsMu.Unlock()
 }
 

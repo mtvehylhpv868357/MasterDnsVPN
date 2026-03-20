@@ -85,7 +85,7 @@ func (c *Client) initializeSessionOnce() error {
 		c.applySessionCompressionPolicy()
 		c.clearSessionInitBusyUntil()
 		c.resetSessionInitState()
-		c.clearReconnectPending()
+		c.clearSessionResetPending()
 		return nil
 	default:
 		return ErrSessionInitFailed

@@ -431,7 +431,7 @@ func (r *stream0Runtime) processDequeue(packet arq.QueuedPacket) {
 		}
 	}
 
-	if r.client != nil && r.client.reconnectPending.Load() {
+	if r.client != nil && r.client.sessionResetPending.Load() {
 		return
 	}
 
@@ -448,7 +448,7 @@ func (r *stream0Runtime) processDequeue(packet arq.QueuedPacket) {
 }
 
 func (r *stream0Runtime) handleDequeueFailure(packet arq.QueuedPacket, now time.Time) {
-	if r != nil && r.client != nil && r.client.reconnectPending.Load() {
+	if r != nil && r.client != nil && r.client.sessionResetPending.Load() {
 		return
 	}
 	switch {

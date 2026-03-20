@@ -143,71 +143,72 @@ func main() {
 		notifySessionClose()
 	}()
 
-	readyCh := make(chan struct{})
-	managerErrCh := make(chan error, 1)
-	go func() {
-		managerErrCh <- app.RunConnectionManager(runCtx, readyCh)
-	}()
+	enabledListeners := enabledClientListenerCount(cfg.LocalDNSEnabled, cfg.ProtocolType)
+	bootstrapReadyLogged := false
 
-	select {
-	case <-readyCh:
-		if log != nil {
-			log.Infof("\U0001F3AF <green>Client Bootstrap Ready</green>")
-		}
-	case err := <-managerErrCh:
-		if err != nil {
+	for {
+		readyCh := make(chan struct{})
+		if err := app.RunConnectionManager(runCtx, readyCh); err != nil {
 			exitWithStderrf("Connection manager failed: %v\n", err)
 		}
-		return
-	case <-runCtx.Done():
-		notifySessionClose()
-		return
-	}
 
-	if !cfg.LocalDNSEnabled && cfg.ProtocolType != "SOCKS5" && cfg.ProtocolType != "TCP" {
-		notifySessionClose()
-		stop()
 		select {
-		case err := <-managerErrCh:
-			if err != nil {
-				exitWithStderrf("Connection manager failed: %v\n", err)
+		case <-readyCh:
+			if !bootstrapReadyLogged && log != nil {
+				log.Infof("\U0001F3AF <green>Client Bootstrap Ready</green>")
+				bootstrapReadyLogged = true
 			}
 		default:
 		}
-		return
-	}
 
-	enabledListeners := enabledClientListenerCount(cfg.LocalDNSEnabled, cfg.ProtocolType)
-	errCh := make(chan error, enabledListeners+1)
-	var listenersWG sync.WaitGroup
-
-	if cfg.LocalDNSEnabled {
-		startClientListener(&listenersWG, errCh, stop, "local dns listener", runCtx, app.RunLocalDNSListener)
-	}
-
-	switch cfg.ProtocolType {
-	case "SOCKS5":
-		startClientListener(&listenersWG, errCh, stop, "local socks5 listener", runCtx, app.RunLocalSOCKS5Listener)
-	case "TCP":
-		startClientListener(&listenersWG, errCh, stop, "local tcp listener", runCtx, app.RunLocalTCPListener)
-	}
-
-	listenersWG.Go(func() {
-		if err := <-managerErrCh; err != nil {
-			select {
-			case errCh <- fmt.Errorf("connection manager failed: %w", err):
-			default:
-			}
-			stop()
+		if !cfg.LocalDNSEnabled && cfg.ProtocolType != "SOCKS5" && cfg.ProtocolType != "TCP" {
+			<-runCtx.Done()
+			notifySessionClose()
+			return
 		}
-	})
 
-	listenersWG.Wait()
-	notifySessionClose()
-	select {
-	case err := <-errCh:
-		exitWithStderrf("%v\n", err)
-	default:
+		sessionCtx, cancelSession := context.WithCancel(runCtx)
+		errCh := make(chan error, enabledListeners)
+		resetCh := make(chan struct{}, 1)
+		var listenersWG sync.WaitGroup
+
+		if cfg.LocalDNSEnabled {
+			startClientListener(&listenersWG, errCh, stop, "local dns listener", sessionCtx, app.RunLocalDNSListener)
+		}
+
+		switch cfg.ProtocolType {
+		case "SOCKS5":
+			startClientListener(&listenersWG, errCh, stop, "local socks5 listener", sessionCtx, app.RunLocalSOCKS5Listener)
+		case "TCP":
+			startClientListener(&listenersWG, errCh, stop, "local tcp listener", sessionCtx, app.RunLocalTCPListener)
+		}
+
+		go func() {
+			if app.WaitForSessionReset(sessionCtx) {
+				select {
+				case resetCh <- struct{}{}:
+				default:
+				}
+				cancelSession()
+			}
+		}()
+
+		select {
+		case err := <-errCh:
+			cancelSession()
+			listenersWG.Wait()
+			notifySessionClose()
+			exitWithStderrf("%v\n", err)
+		case <-resetCh:
+			cancelSession()
+			listenersWG.Wait()
+			continue
+		case <-runCtx.Done():
+			cancelSession()
+			listenersWG.Wait()
+			notifySessionClose()
+			return
+		}
 	}
 }
 

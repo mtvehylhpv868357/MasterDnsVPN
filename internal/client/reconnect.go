@@ -30,6 +30,7 @@ func (c *Client) RunConnectionManager(ctx context.Context, ready chan<- struct{}
 	}
 
 	readySent := false
+initLoop:
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil
@@ -56,17 +57,6 @@ func (c *Client) RunConnectionManager(ctx context.Context, ready chan<- struct{}
 			}
 		}
 
-		if c.SessionReady() {
-			if !readySent {
-				closeReadyChannel(ready)
-				readySent = true
-			}
-			if !c.waitForReconnectSignal(ctx) {
-				return nil
-			}
-			continue
-		}
-
 		if busyUntil := c.sessionInitBusyUntil(); !busyUntil.IsZero() {
 			if remaining := time.Until(busyUntil); remaining > 0 {
 				if !sleepWithContext(ctx, remaining) {
@@ -77,36 +67,47 @@ func (c *Client) RunConnectionManager(ctx context.Context, ready chan<- struct{}
 			c.clearSessionInitBusyUntil()
 		}
 
-		err := c.InitializeSession(1)
-		switch {
-		case err == nil:
-			if c.log != nil {
-				c.log.Infof(
-					"\U0001F91D <green>Session Established ID: <cyan>%d</cyan> Cookie: <cyan>%d</cyan></green>",
-					c.SessionID(),
-					c.SessionCookie(),
-				)
-			}
-			if !readySent {
-				closeReadyChannel(ready)
-				readySent = true
-			}
-		case errors.Is(err, ErrSessionInitBusy):
-			if c.log != nil {
-				c.log.Warnf("\U0001F6AB <yellow>Server session capacity is full, retrying session init in <cyan>%d</cyan> seconds</yellow>", int(sessionInitBusyRetryInterval/time.Second))
-			}
-			if !sleepWithContext(ctx, sessionInitBusyRetryInterval) {
+		initFailures := 0
+		for !c.SessionReady() {
+			if err := ctx.Err(); err != nil {
 				return nil
 			}
-		case errors.Is(err, ErrNoValidConnections):
-			c.MarkMTUChecksStale()
-			c.resetSessionInitState()
-			if !sleepWithContext(ctx, mtuRetryInterval) {
+
+			err := c.InitializeSession(1)
+			switch {
+			case err == nil:
+				if c.log != nil {
+					c.log.Infof(
+						"\U0001F91D <green>Session Established ID: <cyan>%d</cyan> Cookie: <cyan>%d</cyan></green>",
+						c.SessionID(),
+						c.SessionCookie(),
+					)
+				}
+				if !readySent {
+					closeReadyChannel(ready)
+					readySent = true
+				}
 				return nil
-			}
-		default:
-			if !sleepWithContext(ctx, sessionInitRetryInterval) {
-				return nil
+			case errors.Is(err, ErrSessionInitBusy):
+				if c.log != nil {
+					c.log.Warnf("\U0001F6AB <yellow>Server session capacity is full, retrying session init in <cyan>%d</cyan> seconds</yellow>", int(sessionInitBusyRetryInterval/time.Second))
+				}
+				if !sleepWithContext(ctx, sessionInitBusyRetryInterval) {
+					return nil
+				}
+			case errors.Is(err, ErrNoValidConnections):
+				c.MarkMTUChecksStale()
+				c.resetSessionInitState()
+				continue initLoop
+			default:
+				initFailures++
+				delay := time.Duration(0)
+				if initFailures > 10 {
+					delay = 5 * time.Second
+				}
+				if delay > 0 && !sleepWithContext(ctx, delay) {
+					return nil
+				}
 			}
 		}
 	}
@@ -126,7 +127,7 @@ func (c *Client) handleServerDropPacket(packet VpnProto.Packet) error {
 			packet.SessionID,
 		)
 	}
-	c.requestReconnect()
+	c.requestSessionReset()
 	return ErrSessionDropped
 }
 
@@ -134,7 +135,7 @@ func (c *Client) shouldReconnectForDrop(packet VpnProto.Packet) bool {
 	if c == nil || packet.PacketType != Enums.PACKET_ERROR_DROP {
 		return false
 	}
-	if c.reconnectPending.Load() {
+	if c.sessionResetPending.Load() {
 		return false
 	}
 	if c.sessionReady {
@@ -143,35 +144,39 @@ func (c *Client) shouldReconnectForDrop(packet VpnProto.Packet) bool {
 	return c.sessionID != 0 && packet.SessionID == c.sessionID
 }
 
-func (c *Client) requestReconnect() {
-	if c == nil || !c.reconnectPending.CompareAndSwap(false, true) {
+func (c *Client) requestSessionReset() {
+	if c == nil || !c.sessionResetPending.CompareAndSwap(false, true) {
 		return
 	}
 	c.resetSessionInitState()
 	c.ResetRuntimeState(true)
 	select {
-	case c.reconnectSignal <- struct{}{}:
+	case c.sessionResetSignal <- struct{}{}:
 	default:
 	}
 }
 
-func (c *Client) clearReconnectPending() {
+func (c *Client) clearSessionResetPending() {
 	if c == nil {
 		return
 	}
-	c.reconnectPending.Store(false)
+	c.sessionResetPending.Store(false)
 }
 
-func (c *Client) waitForReconnectSignal(ctx context.Context) bool {
+func (c *Client) waitForSessionReset(ctx context.Context) bool {
 	if c == nil {
 		return false
 	}
 	select {
 	case <-ctx.Done():
 		return false
-	case <-c.reconnectSignal:
+	case <-c.sessionResetSignal:
 		return true
 	}
+}
+
+func (c *Client) WaitForSessionReset(ctx context.Context) bool {
+	return c.waitForSessionReset(ctx)
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) bool {

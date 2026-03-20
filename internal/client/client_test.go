@@ -249,8 +249,8 @@ func TestHandleServerDropPacketResetsRuntimeOnce(t *testing.T) {
 	if c.sessionInitReady || len(c.sessionInitPayload) != 0 {
 		t.Fatal("session init state should be reset on first drop")
 	}
-	if !c.reconnectPending.Load() {
-		t.Fatal("reconnect should be pending after drop")
+	if !c.sessionResetPending.Load() {
+		t.Fatal("session reset should be pending after drop")
 	}
 	if _, ok := c.getStream(stream.ID); ok {
 		t.Fatal("active stream should be cleared after drop")
@@ -1894,8 +1894,8 @@ func TestStream0RuntimeProcessDequeueHandlesServerDrop(t *testing.T) {
 		Priority:       arq.DefaultPriorityForPacket(Enums.PACKET_DNS_QUERY_REQ),
 	})
 
-	if !c.reconnectPending.Load() {
-		t.Fatal("expected reconnect to be pending after queued main-packet drop response")
+	if !c.sessionResetPending.Load() {
+		t.Fatal("expected session reset to be pending after queued main-packet drop response")
 	}
 	if c.SessionReady() {
 		t.Fatal("expected session to be cleared after queued main-packet drop response")
