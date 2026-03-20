@@ -135,12 +135,7 @@ func (c *Client) sendFragmentedStreamPacketWithConnection(connection Connection,
 			return VpnProto.Packet{}, err
 		}
 
-		response, err := c.exchangeDNSOverConnection(connection, query, remaining)
-		if err != nil {
-			return VpnProto.Packet{}, err
-		}
-
-		packet, err := c.parseValidatedServerPacket(response, fallbackErr)
+		packet, err := c.exchangeDNSOverConnection(connection, query, remaining)
 		if err != nil {
 			return VpnProto.Packet{}, err
 		}

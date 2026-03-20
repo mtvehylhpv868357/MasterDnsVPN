@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"masterdnsvpn-go/internal/compression"
-	DnsParser "masterdnsvpn-go/internal/dnsparser"
 	Enums "masterdnsvpn-go/internal/enums"
 	VpnProto "masterdnsvpn-go/internal/vpnproto"
 )
@@ -51,7 +50,7 @@ func (c *Client) InitializeSession(maxAttempts int) error {
 }
 
 func (c *Client) initializeSessionOnce() error {
-	conn, initPayload, responseBase64, verifyCode, err := c.nextSessionInitAttempt()
+	conn, initPayload, verifyCode, err := c.nextSessionInitAttempt()
 	if err != nil {
 		return err
 	}
@@ -61,13 +60,8 @@ func (c *Client) initializeSessionOnce() error {
 		return ErrSessionInitFailed
 	}
 
-	response, err := c.exchangeDNSOverConnection(conn, query, c.mtuTestTimeout)
+	packet, err := c.exchangeDNSOverConnection(conn, query, c.mtuTestTimeout)
 	if err != nil {
-		return ErrSessionInitFailed
-	}
-
-	packet, err := DnsParser.ExtractVPNResponse(response, responseBase64)
-	if err != nil || !c.validateServerPacket(packet) {
 		return ErrSessionInitFailed
 	}
 
@@ -117,10 +111,10 @@ func (c *Client) buildSessionInitPayload() ([]byte, bool, [4]byte, error) {
 	return payload, payload[0] == mtuProbeBase64Reply, verifyCode, nil
 }
 
-func (c *Client) nextSessionInitAttempt() (Connection, []byte, bool, [4]byte, error) {
+func (c *Client) nextSessionInitAttempt() (Connection, []byte, [4]byte, error) {
 	var empty [4]byte
 	if c == nil {
-		return Connection{}, nil, false, empty, ErrSessionInitFailed
+		return Connection{}, nil, empty, ErrSessionInitFailed
 	}
 
 	c.initStateMu.Lock()
@@ -129,7 +123,7 @@ func (c *Client) nextSessionInitAttempt() (Connection, []byte, bool, [4]byte, er
 	if !c.sessionInitReady {
 		payload, responseBase64, verifyCode, err := c.buildSessionInitPayload()
 		if err != nil {
-			return Connection{}, nil, false, empty, err
+			return Connection{}, nil, empty, err
 		}
 		c.sessionInitPayload = payload
 		c.sessionInitBase64 = responseBase64
@@ -145,7 +139,7 @@ func (c *Client) nextSessionInitAttempt() (Connection, []byte, bool, [4]byte, er
 		}
 	}
 	if validCount == 0 {
-		return Connection{}, nil, false, empty, ErrNoValidConnections
+		return Connection{}, nil, empty, ErrNoValidConnections
 	}
 
 	start := c.sessionInitCursor
@@ -156,10 +150,10 @@ func (c *Client) nextSessionInitAttempt() (Connection, []byte, bool, [4]byte, er
 			continue
 		}
 		c.sessionInitCursor = (idx + 1) % len(c.connections)
-		return conn, c.sessionInitPayload, c.sessionInitBase64, c.sessionInitVerify, nil
+		return conn, c.sessionInitPayload, c.sessionInitVerify, nil
 	}
 
-	return Connection{}, nil, false, empty, ErrNoValidConnections
+	return Connection{}, nil, empty, ErrNoValidConnections
 }
 
 func (c *Client) resetSessionInitState() {

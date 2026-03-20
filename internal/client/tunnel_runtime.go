@@ -12,7 +12,6 @@ import (
 	"errors"
 	"net"
 	"os"
-	"strconv"
 	"time"
 
 	"masterdnsvpn-go/internal/arq"
@@ -54,9 +53,11 @@ func (c *Client) sendStreamPacket(packet arq.QueuedPacket, connections []Connect
 	} else {
 		connections, err = c.runtimeConnections(connections)
 	}
+
 	if err != nil {
 		return VpnProto.Packet{}, err
 	}
+
 	return tryConnectionsParallel(connections, ErrStreamHandshakeFailed, func(connection Connection) (VpnProto.Packet, error) {
 		return c.sendStreamControlPacketWithConnection(
 			connection,
@@ -104,11 +105,7 @@ func (c *Client) sendMainQueuedPacketWithConnection(connection Connection, packe
 		return VpnProto.Packet{}, err
 	}
 
-	response, err := c.exchangeDNSOverConnection(connection, query, timeout)
-	if err != nil {
-		return VpnProto.Packet{}, err
-	}
-	return c.parseValidatedServerPacket(response, ErrTunnelDNSDispatchFailed)
+	return c.exchangeDNSOverConnection(connection, query, timeout)
 }
 
 func (c *Client) buildSessionControlQuery(domain string, packetType uint8, payload []byte) ([]byte, error) {
@@ -181,8 +178,8 @@ func (c *Client) fragmentQueuedMainPayload(packetType uint8, payload []byte) ([]
 	return fragments, nil
 }
 
-func (c *Client) exchangeDNSOverConnection(connection Connection, packet []byte, timeout time.Duration) ([]byte, error) {
-	startedAt := time.Now()
+func (c *Client) exchangeDNSOverConnection(connection Connection, packet []byte, timeout time.Duration) (VpnProto.Packet, error) {
+	startedAt := c.now()
 	c.noteResolverSend(connection.Key)
 
 	if c != nil && c.exchangeQueryFn != nil {
@@ -191,26 +188,120 @@ func (c *Client) exchangeDNSOverConnection(connection Connection, packet []byte,
 			if isResolverTimeout(err) {
 				c.noteResolverTimeout(connection.Key)
 			}
-			return nil, err
+			return VpnProto.Packet{}, err
 		}
-		c.noteResolverSuccess(connection.Key, time.Since(startedAt))
-		return response, nil
+		c.noteResolverSuccess(connection.Key, c.now().Sub(startedAt))
+		return c.parseValidatedServerPacket(response, ErrTunnelDNSDispatchFailed)
 	}
 
-	transport, err := newUDPQueryTransport(connection.ResolverLabel)
+	conn, err := c.getUDPConn(connection.ResolverLabel)
 	if err != nil {
-		return nil, err
+		return VpnProto.Packet{}, err
 	}
-	defer transport.conn.Close()
-	response, err := exchangeUDPQuery(transport, packet, timeout)
+
+	response, err := c.exchangeUDPQueryWithConn(conn, packet, timeout)
 	if err != nil {
+		_ = conn.Close() // Don't return to pool on error
 		if isResolverTimeout(err) {
 			c.noteResolverTimeout(connection.Key)
 		}
+		return VpnProto.Packet{}, err
+	}
+
+	c.putUDPConn(connection.ResolverLabel, conn)
+	c.noteResolverSuccess(connection.Key, c.now().Sub(startedAt))
+	packetResponse, err := c.parseValidatedServerPacket(response, ErrTunnelDNSDispatchFailed)
+	if len(packetResponse.Payload) != 0 {
+		packetResponse.Payload = append([]byte(nil), packetResponse.Payload...)
+	}
+	c.udpBufferPool.Put(response)
+	return packetResponse, err
+}
+
+func (c *Client) getUDPConn(resolverLabel string) (*net.UDPConn, error) {
+	c.resolverConnsMu.Lock()
+	pool, ok := c.resolverConns[resolverLabel]
+	if !ok {
+		pool = make(chan *net.UDPConn, 32)
+		c.resolverConns[resolverLabel] = pool
+	}
+	c.resolverConnsMu.Unlock()
+
+	select {
+	case conn := <-pool:
+		return conn, nil
+	default:
+		return dialUDPResolver(resolverLabel)
+	}
+}
+
+func (c *Client) putUDPConn(resolverLabel string, conn *net.UDPConn) {
+	if conn == nil {
+		return
+	}
+	c.resolverConnsMu.Lock()
+	pool := c.resolverConns[resolverLabel]
+	c.resolverConnsMu.Unlock()
+
+	if pool == nil {
+		_ = conn.Close()
+		return
+	}
+
+	select {
+	case pool <- conn:
+	default:
+		_ = conn.Close()
+	}
+}
+
+func (c *Client) exchangeUDPQueryWithConn(conn *net.UDPConn, packet []byte, timeout time.Duration) ([]byte, error) {
+	if len(packet) < 2 {
+		return nil, errors.New("malformed dns query")
+	}
+	expectedID := packet[:2]
+
+	// Drain any stale packets from the buffer (non-blocking)
+	drainBuffer := c.udpBufferPool.Get().([]byte)
+	for {
+		if err := conn.SetReadDeadline(time.Now()); err != nil {
+			break
+		}
+		if _, err := conn.Read(drainBuffer); err != nil {
+			break
+		}
+	}
+	c.udpBufferPool.Put(drainBuffer)
+
+	timeout = normalizeTimeout(timeout, time.Second)
+	deadline := time.Now().Add(timeout)
+	if err := conn.SetDeadline(deadline); err != nil {
 		return nil, err
 	}
-	c.noteResolverSuccess(connection.Key, time.Since(startedAt))
-	return response, nil
+
+	if _, err := conn.Write(packet); err != nil {
+		return nil, err
+	}
+
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, os.ErrDeadlineExceeded
+		}
+
+		buffer := c.udpBufferPool.Get().([]byte)
+		n, err := conn.Read(buffer)
+		if err != nil {
+			c.udpBufferPool.Put(buffer)
+			return nil, err
+		}
+
+		if n >= 2 && buffer[0] == expectedID[0] && buffer[1] == expectedID[1] {
+			return buffer[:n], nil
+		}
+		// Stale packet or from another request, continue reading until timeout
+		c.udpBufferPool.Put(buffer)
+	}
 }
 
 func isResolverTimeout(err error) bool {
@@ -264,8 +355,13 @@ func (c *Client) maxMainStreamFragmentPayload(domain string, packetType uint8) i
 		return 0
 	}
 
-	cacheKey := domain + "|" + strconv.Itoa(int(packetType))
-	if cached, ok := c.fragmentLimits.Load(cacheKey); ok {
+	type fragmentCacheKey struct {
+		domain     string
+		packetType uint8
+	}
+
+	key := fragmentCacheKey{domain: domain, packetType: packetType}
+	if cached, ok := c.fragmentLimits.Load(key); ok {
 		return cached.(int)
 	}
 
@@ -285,7 +381,7 @@ func (c *Client) maxMainStreamFragmentPayload(domain string, packetType uint8) i
 		}
 	}
 
-	c.fragmentLimits.Store(cacheKey, best)
+	c.fragmentLimits.Store(key, best)
 	return best
 }
 
@@ -399,12 +495,7 @@ func (c *Client) sendSessionControlPacketWithConnection(connection Connection, p
 		return VpnProto.Packet{}, err
 	}
 
-	response, err := c.exchangeDNSOverConnection(connection, query, timeout)
-	if err != nil {
-		return VpnProto.Packet{}, err
-	}
-
-	return c.parseValidatedServerPacket(response, ErrTunnelDNSDispatchFailed)
+	return c.exchangeDNSOverConnection(connection, query, timeout)
 }
 
 func (c *Client) parseValidatedServerPacket(response []byte, fallbackErr error) (VpnProto.Packet, error) {

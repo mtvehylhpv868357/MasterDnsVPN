@@ -105,6 +105,11 @@ type Client struct {
 	sessionInitReady    bool
 	sessionInitCursor   int
 	sessionInitBusyUnix atomic.Int64
+
+	resolverConnsMu sync.Mutex
+	resolverConns   map[string]chan *net.UDPConn
+
+	udpBufferPool sync.Pool
 }
 
 const (
@@ -237,6 +242,12 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		resolverRecheck:           make(map[string]resolverRecheckState, len(cfg.Domains)*len(cfg.Resolvers)),
 		runtimeDisabled:           make(map[string]resolverDisabledState, len(cfg.Domains)*len(cfg.Resolvers)),
 		reconnectSignal:           make(chan struct{}, 1),
+		resolverConns:             make(map[string]chan *net.UDPConn),
+		udpBufferPool: sync.Pool{
+			New: func() any {
+				return make([]byte, EDnsSafeUDPSize)
+			},
+		},
 	}
 
 	if c.localDNSCacheFlushTick <= 0 {
@@ -371,6 +382,23 @@ func (c *Client) ResetRuntimeState(resetSessionCookie bool) {
 	c.healthRuntimeRun = false
 	c.resolverHealthMu.Unlock()
 	c.clearSessionInitBusyUntil()
+
+	c.resolverConnsMu.Lock()
+	for _, pool := range c.resolverConns {
+		for {
+			select {
+			case conn := <-pool:
+				if conn != nil {
+					_ = conn.Close()
+				}
+			default:
+				goto nextPool
+			}
+		}
+	nextPool:
+	}
+	c.resolverConns = make(map[string]chan *net.UDPConn)
+	c.resolverConnsMu.Unlock()
 }
 
 func (c *Client) updateMaxPackedBlocks() {
