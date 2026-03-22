@@ -13,8 +13,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -492,71 +490,6 @@ func (c *Client) Run(ctx context.Context) error {
 			}
 		}
 	}
-}
-
-func formatResolverEndpoint(resolver string, port int) string {
-	if strings.IndexByte(resolver, ':') >= 0 && !strings.HasPrefix(resolver, "[") {
-		return fmt.Sprintf("[%s]:%d", resolver, port)
-	}
-	return fmt.Sprintf("%s:%d", resolver, port)
-}
-
-func makeConnectionKey(resolver string, port int, domain string) string {
-	return resolver + "|" + strconv.Itoa(port) + "|" + domain
-}
-
-// now returns the current time.
-func (c *Client) now() time.Time {
-	return time.Now()
-}
-
-// validateServerPacket checks if the incoming VPN packet is valid for the current session.
-func (c *Client) validateServerPacket(packet VpnProto.Packet) bool {
-	// For MTU and initial handshake, we might not have a session ready
-	if isPreSessionResponseType(packet.PacketType) {
-		return true
-	}
-	// In this minimal version, we might not have session state yet,
-	// so we'll just return true for now to allow MTU tests to pass.
-	// Once session logic is added, we will restore the proper check.
-	return true
-}
-
-// isPreSessionResponseType returns true if the packet type is expected before a session is fully established.
-func isPreSessionResponseType(packetType uint8) bool {
-	switch packetType {
-	case Enums.PACKET_MTU_UP_RES,
-		Enums.PACKET_MTU_DOWN_RES,
-		Enums.PACKET_SESSION_ACCEPT,
-		Enums.PACKET_SESSION_BUSY,
-		Enums.PACKET_ERROR_DROP:
-		return true
-	default:
-		return false
-	}
-}
-
-// initResolverRecheckMeta initializes metadata for resolver health monitoring.
-func (c *Client) initResolverRecheckMeta() {
-	// Recheck logic not fully implemented yet
-}
-
-// connectionPtrByKey returns a pointer to a Connection object based on its unique key.
-func (c *Client) connectionPtrByKey(key string) *Connection {
-	if idx, ok := c.connectionsByKey[key]; ok {
-		return &c.connections[idx]
-	}
-	return nil
-}
-
-// SetConnectionValidity updates the validity status of a connection.
-func (c *Client) SetConnectionValidity(key string, isValid bool) bool {
-	conn := c.connectionPtrByKey(key)
-	if conn == nil {
-		return false
-	}
-	conn.IsValid = isValid
-	return true
 }
 
 func (c *Client) HandleSessionReject(packet VpnProto.Packet) error {
