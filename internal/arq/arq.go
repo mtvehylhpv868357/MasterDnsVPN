@@ -441,6 +441,8 @@ func (a *ARQ) MarkFinSent() {
 		a.setState(StateHalfClosedLocal)
 	}
 	a.mu.Unlock()
+
+	a.tryFinalizeRemoteEOF()
 }
 
 func (a *ARQ) MarkFinReceived() {
@@ -572,7 +574,7 @@ func (a *ARQ) ioLoop() {
 		a.waitWindowNotFull()
 
 		a.mu.Lock()
-		if a.stopLocalRead {
+		if a.stopLocalRead || a.closed {
 			a.mu.Unlock()
 			alreadyHandled = true
 			break
@@ -922,7 +924,7 @@ func (a *ARQ) writeLoop() {
 			}
 
 			a.mu.Lock()
-			if !a.ioReady {
+			if !a.ioReady || a.closed {
 				a.mu.Unlock()
 				break
 			}
@@ -1255,15 +1257,16 @@ func (a *ARQ) handleTerminalRetransmitState(now time.Time) bool {
 		if waitingFor == Enums.PACKET_STREAM_FIN && a.finSeqSent != nil {
 			a.clearWaitingAck(Enums.PACKET_STREAM_FIN)
 			a.clearTrackedControlPacket(Enums.PACKET_STREAM_FIN, *a.finSeqSent, 0)
+			a.tryFinalizeRemoteEOF()
 		}
 
 		return false
 	}
 
-	if a.rstReceived && a.state != StateReset {
+	// Check for peer-signaled reset termination
+	if (a.state == StateReset || a.rstReceived) && !a.closed {
 		a.mu.Unlock()
-		a.MarkRstReceived()
-		a.Close("Peer reset signaled", CloseOptions{Force: true})
+		a.finalizeClose("Stream Reset (Retransmit Path Check)")
 		return true
 	}
 
