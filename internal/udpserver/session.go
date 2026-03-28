@@ -615,6 +615,7 @@ func (r *sessionRecord) getOrCreateStream(streamID uint16, arqConfig arq.Config,
 	}
 
 	s := NewStreamServer(streamID, r.ID, arqConfig, localConn, r.DownloadMTUBytes, r.StreamQueueCap, logger)
+	s.onClosed = r.onStreamClosed
 	r.Streams[streamID] = s
 
 	// Active streams tracking: keep sorted for Round-Robin predictability
@@ -644,6 +645,13 @@ func (r *sessionRecord) getOrCreateStream(streamID uint16, arqConfig arq.Config,
 	}
 
 	return s
+}
+
+func (r *sessionRecord) onStreamClosed(streamID uint16, now time.Time) {
+	if r == nil || streamID == 0 {
+		return
+	}
+	r.removeStream(streamID, now)
 }
 
 func (r *sessionRecord) getStream(streamID uint16) (*Stream_server, bool) {

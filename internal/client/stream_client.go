@@ -68,6 +68,7 @@ type Stream_client struct {
 	statusMu      sync.RWMutex
 	terminalSince time.Time
 	socksResultMu sync.Mutex
+	cleanupOnce   sync.Once
 }
 
 // get_new_stream_id finds the next available stream ID using a circular counter (1-65535).
@@ -300,6 +301,28 @@ func (s *Stream_client) cleanupResources() {
 	s.SetStatus(streamStatusClosed)
 }
 
+func (s *Stream_client) finalizeAfterARQClose() {
+	if s == nil {
+		return
+	}
+
+	s.cleanupOnce.Do(func() {
+		if s.client != nil {
+			s.client.streamsMu.Lock()
+			if current, ok := s.client.active_streams[s.StreamID]; ok && current == s {
+				delete(s.client.active_streams, s.StreamID)
+			}
+			s.client.streamsMu.Unlock()
+		}
+
+		s.cleanupResources()
+	})
+}
+
+func (s *Stream_client) OnARQClosed(string) {
+	s.finalizeAfterARQClose()
+}
+
 // Close gracefully shuts down the stream and releases all resources.
 func (s *Stream_client) Close() {
 	if s.Stream != nil {
@@ -307,7 +330,7 @@ func (s *Stream_client) Close() {
 			a.Close("Stream_client.Close cleanup", arq.CloseOptions{Force: true})
 		}
 	}
-	s.cleanupResources()
+	s.finalizeAfterARQClose()
 }
 
 func (s *Stream_client) CloseStream(force bool, ttl time.Duration) {
@@ -322,12 +345,12 @@ func (s *Stream_client) CloseStream(force bool, ttl time.Duration) {
 			TTL:     ttl,
 		})
 		if force {
-			s.cleanupResources()
+			s.finalizeAfterARQClose()
 		}
 		return
 	}
 
-	s.cleanupResources()
+	s.finalizeAfterARQClose()
 }
 
 // ReleaseTXPacket returns a packet to the pool.

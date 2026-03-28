@@ -133,18 +133,22 @@ func TestHandleStreamPacketConnectFailClosesTCPStream(t *testing.T) {
 		t.Fatalf("HandleStreamPacket returned error: %v", err)
 	}
 
-	if got := stream.StatusValue(); got != streamStatusTimeWait {
-		t.Fatalf("expected stream status %q, got %q", streamStatusTimeWait, got)
-	}
-	if stream.TerminalSince().IsZero() {
-		t.Fatal("expected stream to be marked terminal after connect failure")
-	}
-
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for !arqObj.IsClosed() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if !arqObj.IsClosed() {
 		t.Fatal("expected ARQ stream to be closed after connect failure")
+	}
+
+	if got := stream.StatusValue(); got != streamStatusClosed {
+		t.Fatalf("expected stream status %q, got %q", streamStatusClosed, got)
+	}
+
+	c.streamsMu.RLock()
+	_, stillActive := c.active_streams[stream.StreamID]
+	c.streamsMu.RUnlock()
+	if stillActive {
+		t.Fatal("expected closed stream to be removed from active_streams")
 	}
 }

@@ -41,6 +41,10 @@ type PacketEnqueuer interface {
 	PushTXPacket(priority int, packetType uint8, sequenceNum uint16, fragmentID uint8, totalFragments uint8, compressionType uint8, ttl time.Duration, payload []byte) bool
 }
 
+type terminalOwner interface {
+	OnARQClosed(reason string)
+}
+
 type queuedDataRemover interface {
 	RemoveQueuedData(sequenceNum uint16) bool
 }
@@ -1681,6 +1685,10 @@ func (a *ARQ) finalizeClose(reason string) {
 		rstReceived,
 		rstAcked,
 	)
+
+	if owner, ok := a.enqueuer.(terminalOwner); ok {
+		owner.OnARQClosed(reason)
+	}
 }
 
 // Close is the single close entrypoint for this ARQ stream.

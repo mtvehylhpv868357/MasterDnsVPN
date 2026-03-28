@@ -21,6 +21,7 @@ import (
 type Stream_server struct {
 	mu        sync.RWMutex
 	txQueueMu sync.Mutex
+	cleanupMu sync.Once
 
 	ID        uint16
 	SessionID uint8
@@ -36,6 +37,7 @@ type Stream_server struct {
 	TargetHost   string
 	TargetPort   uint16
 	Connected    bool
+	onClosed     func(uint16, time.Time)
 
 	// Tracking for deduplication (similar to Python's _track_stream_packet_once)
 	// Key: packetType << 16 | sequenceNum
@@ -206,6 +208,24 @@ func (s *Stream_server) cleanupResources() {
 	s.ClearTXQueue()
 }
 
+func (s *Stream_server) finalizeAfterARQClose() {
+	if s == nil {
+		return
+	}
+
+	s.cleanupMu.Do(func() {
+		now := time.Now()
+		s.cleanupResources()
+		if s.onClosed != nil {
+			s.onClosed(s.ID, now)
+		}
+	})
+}
+
+func (s *Stream_server) OnARQClosed(string) {
+	s.finalizeAfterARQClose()
+}
+
 func (s *Stream_server) CloseStream(force bool, ttl time.Duration, reason string) {
 	if s == nil {
 		return
@@ -218,10 +238,10 @@ func (s *Stream_server) CloseStream(force bool, ttl time.Duration, reason string
 			TTL:     ttl,
 		})
 		if force {
-			s.cleanupResources()
+			s.finalizeAfterARQClose()
 		}
 		return
 	}
 
-	s.cleanupResources()
+	s.finalizeAfterARQClose()
 }
