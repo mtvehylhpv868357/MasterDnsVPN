@@ -38,7 +38,7 @@ func newTestSessionRecord(sessionID uint8) *sessionRecord {
 		DownloadMTUBytes: 512,
 		Streams:          make(map[uint16]*Stream_server),
 		ActiveStreams:    make([]uint16, 0, 4),
-		RecentlyClosed:   make(map[uint16]time.Time, 4),
+		RecentlyClosed:   make(map[uint16]recentlyClosedStreamRecord, 4),
 		OrphanQueue:      mlq.New[VpnProto.Packet](8),
 	}
 	r.ensureStream0(nil)
@@ -281,6 +281,71 @@ func TestHandleStreamRSTRequestPreservesRstAckViaOrphanQueue(t *testing.T) {
 	}
 	if ackPkt.PacketType != Enums.PACKET_STREAM_RST_ACK || ackPkt.SequenceNum != 55 {
 		t.Fatalf("unexpected orphan RST_ACK packet: %+v", ackPkt)
+	}
+}
+
+func TestRecentlyClosedGracefulStreamSuppressesMissingStreamReset(t *testing.T) {
+	s := newTestServerForStreamSyn("TCP")
+	record := newTestSessionRecord(16)
+	record.Cookie = 9
+	s.sessions.byID[record.ID] = record
+
+	stream := record.getOrCreateStream(12, arq.Config{}, nil, nil)
+	if stream == nil {
+		t.Fatal("expected stream to be created")
+	}
+
+	stream.OnARQClosed("FIN handshake completed")
+
+	packet := VpnProto.Packet{
+		SessionID:     record.ID,
+		SessionCookie: record.Cookie,
+		PacketType:    Enums.PACKET_STREAM_FIN,
+		StreamID:      12,
+		HasStreamID:   true,
+	}
+
+	if !s.preprocessInboundPacket(packet) {
+		t.Fatal("expected recently closed graceful stream packet to be consumed")
+	}
+	if size := record.OrphanQueue.Size(); size != 0 {
+		t.Fatalf("expected no orphan reset for gracefully closed stream, got %d", size)
+	}
+}
+
+func TestRecentlyClosedNonSuppressedStreamStillQueuesMissingStreamReset(t *testing.T) {
+	s := newTestServerForStreamSyn("TCP")
+	record := newTestSessionRecord(17)
+	record.Cookie = 9
+	s.sessions.byID[record.ID] = record
+	record.noteStreamClosed(14, time.Now(), false)
+
+	packet := VpnProto.Packet{
+		SessionID:     record.ID,
+		SessionCookie: record.Cookie,
+		PacketType:    Enums.PACKET_STREAM_FIN,
+		StreamID:      14,
+		HasStreamID:   true,
+	}
+
+	if !s.preprocessInboundPacket(packet) {
+		t.Fatal("expected recently closed non-suppressed stream packet to be handled")
+	}
+	if size := record.OrphanQueue.Size(); size != 1 {
+		t.Fatalf("expected orphan reset for non-suppressed recently closed stream, got %d", size)
+	}
+}
+
+func TestReusedStreamIDClearsRecentlyClosedTombstone(t *testing.T) {
+	record := newTestSessionRecord(18)
+	record.noteStreamClosed(21, time.Now(), true)
+
+	stream := record.getOrCreateStream(21, arq.Config{}, nil, nil)
+	if stream == nil {
+		t.Fatal("expected stream to be recreated")
+	}
+	if record.isRecentlyClosed(21, time.Now()) {
+		t.Fatal("expected recreated stream id to be removed from recently closed set")
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -59,13 +60,18 @@ type sessionRecord struct {
 	EnqueueSeq                      uint64   // Global sequence for FIFO inside same priority
 	StreamQueueCap                  int
 	StreamsMu                       sync.RWMutex
-	RecentlyClosed                  map[uint16]time.Time
+	RecentlyClosed                  map[uint16]recentlyClosedStreamRecord
 	RecentlyClosedTTL               time.Duration
 	RecentlyClosedCap               int
 	OrphanQueue                     *mlq.MultiLevelQueue[VpnProto.Packet]
 	LastPackedControlBlock          *VpnProto.Packet
 	LastPackedControlBlockRemaining int
 	closedFlag                      uint32
+}
+
+type recentlyClosedStreamRecord struct {
+	ClosedAt       time.Time
+	SuppressOrphan bool
 }
 
 // serverStreamTXPacket represents a queued packet pending transmission or retransmission.
@@ -242,7 +248,7 @@ func (s *sessionStore) findOrCreate(payload []byte, uploadCompressionType uint8,
 		Streams:           make(map[uint16]*Stream_server),
 		ActiveStreams:     make([]uint16, 0, 8),
 		StreamQueueCap:    s.streamQueueCap,
-		RecentlyClosed:    make(map[uint16]time.Time, 8),
+		RecentlyClosed:    make(map[uint16]recentlyClosedStreamRecord, 8),
 		RecentlyClosedTTL: s.recentlyClosedTTL,
 		RecentlyClosedCap: s.recentlyClosedCap,
 		OrphanQueue:       mlq.New[VpnProto.Packet](s.orphanQueueCap),
@@ -614,6 +620,8 @@ func (r *sessionRecord) getOrCreateStream(streamID uint16, arqConfig arq.Config,
 		return s
 	}
 
+	delete(r.RecentlyClosed, streamID)
+
 	s := NewStreamServer(streamID, r.ID, arqConfig, localConn, r.DownloadMTUBytes, r.StreamQueueCap, logger)
 	s.onClosed = r.onStreamClosed
 	r.Streams[streamID] = s
@@ -647,11 +655,15 @@ func (r *sessionRecord) getOrCreateStream(streamID uint16, arqConfig arq.Config,
 	return s
 }
 
-func (r *sessionRecord) onStreamClosed(streamID uint16, now time.Time) {
+func shouldSuppressServerOrphanForCloseReason(reason string) bool {
+	return reason == "FIN handshake completed" || strings.HasSuffix(reason, "acknowledged")
+}
+
+func (r *sessionRecord) onStreamClosed(streamID uint16, now time.Time, reason string) {
 	if r == nil || streamID == 0 {
 		return
 	}
-	r.removeStream(streamID, now)
+	r.removeStream(streamID, now, shouldSuppressServerOrphanForCloseReason(reason))
 }
 
 func (r *sessionRecord) getStream(streamID uint16) (*Stream_server, bool) {
@@ -663,7 +675,7 @@ func (r *sessionRecord) getStream(streamID uint16) (*Stream_server, bool) {
 	r.StreamsMu.RUnlock()
 	return s, ok
 }
-func (r *sessionRecord) noteStreamClosed(streamID uint16, now time.Time) {
+func (r *sessionRecord) noteStreamClosed(streamID uint16, now time.Time, suppressOrphan bool) {
 	if r == nil || r.isClosed() || streamID == 0 {
 		return
 	}
@@ -672,23 +684,26 @@ func (r *sessionRecord) noteStreamClosed(streamID uint16, now time.Time) {
 
 	// Cleanup old records
 	expiredBefore := now.Add(-r.closedStreamRecordTTL())
-	for id, closedAt := range r.RecentlyClosed {
-		if closedAt.Before(expiredBefore) {
+	for id, record := range r.RecentlyClosed {
+		if record.ClosedAt.Before(expiredBefore) {
 			delete(r.RecentlyClosed, id)
 		}
 	}
 
-	r.RecentlyClosed[streamID] = now
+	r.RecentlyClosed[streamID] = recentlyClosedStreamRecord{
+		ClosedAt:       now,
+		SuppressOrphan: suppressOrphan,
+	}
 
 	// Cap the map size
 	if len(r.RecentlyClosed) > r.closedStreamRecordCap() {
 		var oldestID uint16
 		var oldestAt time.Time
 		first := true
-		for id, closedAt := range r.RecentlyClosed {
-			if first || closedAt.Before(oldestAt) {
+		for id, record := range r.RecentlyClosed {
+			if first || record.ClosedAt.Before(oldestAt) {
 				oldestID = id
-				oldestAt = closedAt
+				oldestAt = record.ClosedAt
 				first = false
 			}
 		}
@@ -703,12 +718,27 @@ func (r *sessionRecord) isRecentlyClosed(streamID uint16, now time.Time) bool {
 	r.StreamsMu.RLock()
 	defer r.StreamsMu.RUnlock()
 
-	closedAt, ok := r.RecentlyClosed[streamID]
+	record, ok := r.RecentlyClosed[streamID]
 	if !ok {
 		return false
 	}
 
-	return now.Sub(closedAt) <= r.closedStreamRecordTTL()
+	return now.Sub(record.ClosedAt) <= r.closedStreamRecordTTL()
+}
+
+func (r *sessionRecord) shouldSuppressOrphanForClosedStream(streamID uint16, now time.Time) bool {
+	if r == nil || r.isClosed() {
+		return false
+	}
+	r.StreamsMu.RLock()
+	defer r.StreamsMu.RUnlock()
+
+	record, ok := r.RecentlyClosed[streamID]
+	if !ok {
+		return false
+	}
+
+	return now.Sub(record.ClosedAt) <= r.closedStreamRecordTTL() && record.SuppressOrphan
 }
 
 func (r *sessionRecord) closedStreamRecordTTL() time.Duration {
@@ -725,7 +755,7 @@ func (r *sessionRecord) closedStreamRecordCap() int {
 	return r.RecentlyClosedCap
 }
 
-func (r *sessionRecord) removeStream(streamID uint16, now time.Time) {
+func (r *sessionRecord) removeStream(streamID uint16, now time.Time, suppressOrphan bool) {
 	if r == nil || r.isClosed() || streamID == 0 {
 		return
 	}
@@ -735,7 +765,7 @@ func (r *sessionRecord) removeStream(streamID uint16, now time.Time) {
 	r.removeActiveStreamLocked(streamID)
 	r.StreamsMu.Unlock()
 
-	r.noteStreamClosed(streamID, now)
+	r.noteStreamClosed(streamID, now, suppressOrphan)
 }
 
 func (r *sessionRecord) deactivateStream(streamID uint16) {
@@ -831,7 +861,7 @@ func (r *sessionRecord) cleanupTerminalStreams(now time.Time, retention time.Dur
 		if stream, ok := snapshot[streamID]; ok && stream != nil {
 			stream.Abort("terminal stream retention cleanup")
 		}
-		r.removeStream(streamID, now)
+		r.removeStream(streamID, now, false)
 	}
 }
 

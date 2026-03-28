@@ -248,6 +248,8 @@ func (c *Client) asyncStreamCleanupWorker(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
+			c.cleanupRecentlyClosedStreams(now)
+
 			c.streamsMu.RLock()
 			streams := make([]*Stream_client, 0, len(c.active_streams))
 			for _, s := range c.active_streams {

@@ -109,10 +109,12 @@ type Client struct {
 	dnsListener *DNSListener
 
 	// Stream Management
-	streamsMu      sync.RWMutex
-	active_streams map[uint16]*Stream_client
-	last_stream_id uint16
-	orphanQueue    *mlq.MultiLevelQueue[VpnProto.Packet]
+	streamsMu             sync.RWMutex
+	active_streams        map[uint16]*Stream_client
+	last_stream_id        uint16
+	orphanQueue           *mlq.MultiLevelQueue[VpnProto.Packet]
+	recentlyClosedMu      sync.Mutex
+	recentlyClosedStreams map[uint16]time.Time
 
 	// Signal to wake up dispatcher
 	txSignal chan struct{}
@@ -229,14 +231,15 @@ func New(cfg config.ClientConfig, log *logger.Logger, codec *security.Codec) *Cl
 		streamResolverFailoverCooldown:        time.Duration(cfg.StreamResolverFailoverCooldownSec * float64(time.Second)),
 
 		// Workers config
-		tunnelReaderWorkers:  cfg.TunnelReaderWorkers,
-		tunnelWriterWorkers:  cfg.TunnelWriterWorkers,
-		tunnelProcessWorkers: cfg.TunnelProcessWorkers,
-		tunnelPacketTimeout:  time.Duration(cfg.TunnelPacketTimeoutSec * float64(time.Second)),
-		txChannel:            make(chan asyncPacket, cfg.TXChannelSize),
-		rxChannel:            make(chan asyncReadPacket, cfg.RXChannelSize),
-		active_streams:       make(map[uint16]*Stream_client),
-		txSignal:             make(chan struct{}, 1),
+		tunnelReaderWorkers:   cfg.TunnelReaderWorkers,
+		tunnelWriterWorkers:   cfg.TunnelWriterWorkers,
+		tunnelProcessWorkers:  cfg.TunnelProcessWorkers,
+		tunnelPacketTimeout:   time.Duration(cfg.TunnelPacketTimeoutSec * float64(time.Second)),
+		txChannel:             make(chan asyncPacket, cfg.TXChannelSize),
+		rxChannel:             make(chan asyncReadPacket, cfg.RXChannelSize),
+		active_streams:        make(map[uint16]*Stream_client),
+		recentlyClosedStreams: make(map[uint16]time.Time),
+		txSignal:              make(chan struct{}, 1),
 
 		// DNS Management
 		localDNSCache: dnsCache.New(

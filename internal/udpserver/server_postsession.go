@@ -189,17 +189,20 @@ func (s *Server) preprocessInboundPacket(vpnPacket VpnProto.Packet) bool {
 		return false
 	}
 
-	if vpnPacket.StreamID != 0 && record.isRecentlyClosed(vpnPacket.StreamID, time.Now()) {
+	existingStream, streamExists := record.getStream(vpnPacket.StreamID)
+	if vpnPacket.StreamID != 0 && (!streamExists || existingStream == nil) && record.isRecentlyClosed(vpnPacket.StreamID, time.Now()) {
 		switch vpnPacket.PacketType {
 		case Enums.PACKET_STREAM_SYN, Enums.PACKET_SOCKS5_SYN:
 			record.enqueueOrphanReset(Enums.PACKET_STREAM_RST, vpnPacket.StreamID, 0)
 			return true
 		default:
+			if record.shouldSuppressOrphanForClosedStream(vpnPacket.StreamID, time.Now()) {
+				return true
+			}
 			return s.enqueueMissingStreamReset(record, vpnPacket)
 		}
 	}
 
-	existingStream, streamExists := record.getStream(vpnPacket.StreamID)
 	if vpnPacket.StreamID != 0 && (!streamExists || existingStream == nil) {
 		return s.enqueueMissingStreamReset(record, vpnPacket)
 	}
@@ -427,7 +430,7 @@ func (s *Server) handleStreamRSTRequest(vpnPacket VpnProto.Packet) bool {
 		stream.mu.Unlock()
 	} else {
 		record.enqueueOrphanReset(Enums.PACKET_STREAM_RST_ACK, vpnPacket.StreamID, vpnPacket.SequenceNum)
-		record.noteStreamClosed(vpnPacket.StreamID, now)
+		record.noteStreamClosed(vpnPacket.StreamID, now, false)
 	}
 
 	s.removeSOCKS5SynFragmentsForStream(vpnPacket.SessionID, vpnPacket.StreamID)

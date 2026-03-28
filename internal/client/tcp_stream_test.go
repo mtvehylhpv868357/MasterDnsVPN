@@ -152,3 +152,45 @@ func TestHandleStreamPacketConnectFailClosesTCPStream(t *testing.T) {
 		t.Fatal("expected closed stream to be removed from active_streams")
 	}
 }
+
+func TestRecentlyClosedFinStreamSuppressesLateOrphanReset(t *testing.T) {
+	c := buildTCPTestClient()
+	stream := c.new_stream(32, nil, nil)
+
+	stream.OnARQClosed("FIN handshake completed")
+
+	c.streamsMu.RLock()
+	_, stillActive := c.active_streams[stream.StreamID]
+	c.streamsMu.RUnlock()
+	if stillActive {
+		t.Fatal("expected recently closed stream to be removed from active_streams")
+	}
+
+	handled := c.preprocessInboundPacket(VpnProto.Packet{
+		PacketType:  Enums.PACKET_STREAM_FIN,
+		StreamID:    stream.StreamID,
+		HasStreamID: true,
+	})
+	if !handled {
+		t.Fatal("expected late FIN for recently closed stream to be consumed")
+	}
+	if size := c.orphanQueue.Size(); size != 0 {
+		t.Fatalf("expected no orphan reset for recently closed stream, got queue size %d", size)
+	}
+}
+
+func TestMissingUnknownStreamStillQueuesOrphanReset(t *testing.T) {
+	c := buildTCPTestClient()
+
+	handled := c.preprocessInboundPacket(VpnProto.Packet{
+		PacketType:  Enums.PACKET_STREAM_FIN,
+		StreamID:    777,
+		HasStreamID: true,
+	})
+	if !handled {
+		t.Fatal("expected missing stream packet to be handled")
+	}
+	if size := c.orphanQueue.Size(); size != 1 {
+		t.Fatalf("expected orphan reset for unknown stream, got queue size %d", size)
+	}
+}

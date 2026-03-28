@@ -319,7 +319,10 @@ func (s *Stream_client) finalizeAfterARQClose() {
 	})
 }
 
-func (s *Stream_client) OnARQClosed(string) {
+func (s *Stream_client) OnARQClosed(reason string) {
+	if s != nil && s.client != nil {
+		s.client.rememberClosedStream(s.StreamID, reason, time.Now())
+	}
 	s.finalizeAfterARQClose()
 }
 
@@ -493,5 +496,6 @@ func (c *Client) CloseAllStreams() {
 		}
 	}
 
+	c.clearRecentlyClosedStreams()
 	c.clearOrphanResets()
 }

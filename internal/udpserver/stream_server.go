@@ -37,7 +37,7 @@ type Stream_server struct {
 	TargetHost   string
 	TargetPort   uint16
 	Connected    bool
-	onClosed     func(uint16, time.Time)
+	onClosed     func(uint16, time.Time, string)
 
 	// Tracking for deduplication (similar to Python's _track_stream_packet_once)
 	// Key: packetType << 16 | sequenceNum
@@ -208,7 +208,7 @@ func (s *Stream_server) cleanupResources() {
 	s.ClearTXQueue()
 }
 
-func (s *Stream_server) finalizeAfterARQClose() {
+func (s *Stream_server) finalizeAfterARQClose(reason string) {
 	if s == nil {
 		return
 	}
@@ -217,13 +217,13 @@ func (s *Stream_server) finalizeAfterARQClose() {
 		now := time.Now()
 		s.cleanupResources()
 		if s.onClosed != nil {
-			s.onClosed(s.ID, now)
+			s.onClosed(s.ID, now, reason)
 		}
 	})
 }
 
-func (s *Stream_server) OnARQClosed(string) {
-	s.finalizeAfterARQClose()
+func (s *Stream_server) OnARQClosed(reason string) {
+	s.finalizeAfterARQClose(reason)
 }
 
 func (s *Stream_server) CloseStream(force bool, ttl time.Duration, reason string) {
@@ -238,10 +238,10 @@ func (s *Stream_server) CloseStream(force bool, ttl time.Duration, reason string
 			TTL:     ttl,
 		})
 		if force {
-			s.finalizeAfterARQClose()
+			s.finalizeAfterARQClose(reason)
 		}
 		return
 	}
 
-	s.finalizeAfterARQClose()
+	s.finalizeAfterARQClose(reason)
 }

@@ -213,6 +213,73 @@ func (c *Client) getStream(streamID uint16) (*Stream_client, bool) {
 	return s, ok
 }
 
+func (c *Client) shouldRememberClosedStream(reason string) bool {
+	if c == nil {
+		return false
+	}
+
+	return reason == "FIN handshake completed" || strings.HasSuffix(reason, "acknowledged")
+}
+
+func (c *Client) rememberClosedStream(streamID uint16, reason string, now time.Time) {
+	if c == nil || streamID == 0 || !c.shouldRememberClosedStream(reason) {
+		return
+	}
+
+	retention := c.cfg.ClientTerminalStreamRetention()
+	if retention <= 0 {
+		retention = 15 * time.Second
+	}
+
+	c.recentlyClosedMu.Lock()
+	c.recentlyClosedStreams[streamID] = now.Add(retention)
+	c.recentlyClosedMu.Unlock()
+}
+
+func (c *Client) isRecentlyClosedStream(streamID uint16, now time.Time) bool {
+	if c == nil || streamID == 0 {
+		return false
+	}
+
+	c.recentlyClosedMu.Lock()
+	defer c.recentlyClosedMu.Unlock()
+
+	expiresAt, ok := c.recentlyClosedStreams[streamID]
+	if !ok {
+		return false
+	}
+	if now.Before(expiresAt) {
+		return true
+	}
+
+	delete(c.recentlyClosedStreams, streamID)
+	return false
+}
+
+func (c *Client) cleanupRecentlyClosedStreams(now time.Time) {
+	if c == nil {
+		return
+	}
+
+	c.recentlyClosedMu.Lock()
+	for streamID, expiresAt := range c.recentlyClosedStreams {
+		if !now.Before(expiresAt) {
+			delete(c.recentlyClosedStreams, streamID)
+		}
+	}
+	c.recentlyClosedMu.Unlock()
+}
+
+func (c *Client) clearRecentlyClosedStreams() {
+	if c == nil {
+		return
+	}
+
+	c.recentlyClosedMu.Lock()
+	clear(c.recentlyClosedStreams)
+	c.recentlyClosedMu.Unlock()
+}
+
 func (c *Client) handleMissingStreamPacket(packet VpnProto.Packet) bool {
 	if c == nil {
 		return false
@@ -256,6 +323,10 @@ func (c *Client) preprocessInboundPacket(packet VpnProto.Packet) bool {
 
 	exists_stream, stream_exists := c.getStream(packet.StreamID)
 	if packet.StreamID != 0 && (!stream_exists || exists_stream == nil) {
+		if c.isRecentlyClosedStream(packet.StreamID, c.now()) {
+			return true
+		}
+
 		c.handleMissingStreamPacket(packet)
 		return true
 	}
