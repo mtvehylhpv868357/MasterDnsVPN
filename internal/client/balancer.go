@@ -27,6 +27,7 @@ type Balancer struct {
 	strategy  int
 	rrCounter atomic.Uint64
 	rngState  atomic.Uint64
+	version   atomic.Uint64
 
 	mu       sync.Mutex
 	snapshot atomic.Pointer[balancerSnapshot]
@@ -40,6 +41,7 @@ type connectionStats struct {
 }
 
 type balancerSnapshot struct {
+	version     uint64
 	connections []*Connection
 	valid       []int
 	indexByKey  map[string]int
@@ -73,6 +75,7 @@ func (b *Balancer) SetConnections(connections []*Connection) {
 	}
 
 	b.snapshot.Store(&balancerSnapshot{
+		version:     b.version.Add(1),
 		connections: connections,
 		valid:       valid,
 		indexByKey:  indexByKey,
@@ -109,6 +112,7 @@ func (b *Balancer) SetConnectionValidity(key string, valid bool) bool {
 
 	conn.IsValid = valid
 	b.snapshot.Store(&balancerSnapshot{
+		version:     b.version.Add(1),
 		connections: snap.connections,
 		valid:       rebuildValidIndices(snap.connections),
 		indexByKey:  snap.indexByKey,
@@ -127,11 +131,20 @@ func (b *Balancer) RefreshValidConnections() {
 	}
 
 	b.snapshot.Store(&balancerSnapshot{
+		version:     b.version.Add(1),
 		connections: snap.connections,
 		valid:       rebuildValidIndices(snap.connections),
 		indexByKey:  snap.indexByKey,
 		stats:       snap.stats,
 	})
+}
+
+func (b *Balancer) SnapshotVersion() uint64 {
+	snap := b.snapshot.Load()
+	if snap == nil {
+		return 0
+	}
+	return snap.version
 }
 
 func (b *Balancer) ReportSend(serverKey string) {

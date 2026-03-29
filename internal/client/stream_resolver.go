@@ -64,6 +64,10 @@ func (c *Client) selectTargetConnectionsForPacket(packetType uint8, streamID uin
 		return []Connection{preferred}, nil
 	}
 
+	if cached, ok := c.getCachedStreamConnectionPlan(stream, preferred.Key, targetCount); ok {
+		return cached, nil
+	}
+
 	selected := make([]Connection, 0, targetCount)
 	selected = append(selected, preferred)
 	seenKeys := map[string]struct{}{preferred.Key: {}}
@@ -85,6 +89,8 @@ func (c *Client) selectTargetConnectionsForPacket(packetType uint8, streamID uin
 	if len(selected) == 0 {
 		return nil, ErrNoValidConnections
 	}
+
+	c.cacheStreamConnectionPlan(stream, preferred.Key, targetCount, selected)
 	return selected, nil
 }
 
@@ -176,6 +182,10 @@ func (c *Client) assignStreamPreferredConnection(stream *Stream_client, connecti
 	stream.resolverMu.Lock()
 	stream.PreferredServerKey = connection.Key
 	stream.ResolverResendStreak = 0
+	stream.CachedResolverPlan = nil
+	stream.CachedResolverPlanFor = ""
+	stream.CachedResolverPlanSize = 0
+	stream.CachedResolverVersion = 0
 	if markFailover {
 		stream.LastResolverFailoverAt = time.Now()
 	}
@@ -227,6 +237,42 @@ func (c *Client) noteStreamProgress(streamID uint16) {
 	}
 	stream.resolverMu.Lock()
 	stream.ResolverResendStreak = 0
+	stream.resolverMu.Unlock()
+}
+
+func (c *Client) getCachedStreamConnectionPlan(stream *Stream_client, preferredKey string, targetCount int) ([]Connection, bool) {
+	if c == nil || stream == nil || c.balancer == nil || preferredKey == "" || targetCount <= 1 {
+		return nil, false
+	}
+
+	version := c.balancer.SnapshotVersion()
+	stream.resolverMu.Lock()
+	defer stream.resolverMu.Unlock()
+
+	if stream.CachedResolverVersion != version ||
+		stream.CachedResolverPlanFor != preferredKey ||
+		stream.CachedResolverPlanSize != targetCount ||
+		len(stream.CachedResolverPlan) == 0 {
+		return nil, false
+	}
+
+	return stream.CachedResolverPlan, true
+}
+
+func (c *Client) cacheStreamConnectionPlan(stream *Stream_client, preferredKey string, targetCount int, selected []Connection) {
+	if c == nil || stream == nil || c.balancer == nil || preferredKey == "" || targetCount <= 1 || len(selected) == 0 {
+		return
+	}
+
+	cached := make([]Connection, len(selected))
+	copy(cached, selected)
+	version := c.balancer.SnapshotVersion()
+
+	stream.resolverMu.Lock()
+	stream.CachedResolverPlan = cached
+	stream.CachedResolverPlanFor = preferredKey
+	stream.CachedResolverPlanSize = targetCount
+	stream.CachedResolverVersion = version
 	stream.resolverMu.Unlock()
 }
 

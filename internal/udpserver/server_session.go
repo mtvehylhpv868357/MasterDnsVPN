@@ -261,34 +261,40 @@ func (s *Server) dequeueSessionResponse(sessionID uint8, now time.Time) (*VpnPro
 	record.mu.Unlock()
 
 	activeIDs, activeStreams := record.activeStreamSnapshot()
-	var idsBuf [32]int32
-	ids := activeIDs
 	hasOrphan := record.OrphanQueue != nil && record.OrphanQueue.Size() > 0
+	totalCandidates := len(activeIDs)
 	if hasOrphan {
-		if len(activeIDs)+1 <= len(idsBuf) {
-			ids = idsBuf[:0]
-		} else {
-			ids = make([]int32, 0, len(activeIDs)+1)
-		}
-		ids = append(ids, -1)
-		ids = append(ids, activeIDs...)
+		totalCandidates++
 	}
-
-	if len(ids) == 0 {
+	if totalCandidates == 0 {
 		return nil, false
 	}
 
 	startIdx := 0
-	for i, id := range ids {
+	candidateAt := func(idx int) (int32, *Stream_server) {
+		if hasOrphan {
+			if idx == 0 {
+				return -1, nil
+			}
+			idx--
+		}
+		if idx < 0 || idx >= len(activeIDs) {
+			return 0, nil
+		}
+		return activeIDs[idx], activeStreams[idx]
+	}
+
+	for i := 0; i < totalCandidates; i++ {
+		id, _ := candidateAt(i)
 		if id >= rrStreamID {
 			startIdx = i
 			break
 		}
 	}
 
-	for i := 0; i < len(ids); i++ {
-		idx := (startIdx + i) % len(ids)
-		id := ids[idx]
+	for i := 0; i < totalCandidates; i++ {
+		idx := (startIdx + i) % totalCandidates
+		id, stream := candidateAt(idx)
 
 		var item *serverStreamTXPacket
 		var ok bool
@@ -310,14 +316,6 @@ func (s *Server) dequeueSessionResponse(sessionID uint8, now time.Time) (*VpnPro
 				ok = true
 			}
 		} else {
-			streamIdx := idx
-			if hasOrphan {
-				streamIdx--
-			}
-			if streamIdx < 0 || streamIdx >= len(activeStreams) {
-				continue
-			}
-			stream := activeStreams[streamIdx]
 			if stream == nil || stream.TXQueue == nil {
 				continue
 			}
@@ -458,9 +456,11 @@ func (s *Server) packControlBlocks(record *sessionRecord, first *serverStreamTXP
 	}
 
 	var initialStream *Stream_server
+	var initialIndex int = -1
 	if initialID != -1 {
 		for i, id := range activeIDs {
 			if id == initialID {
+				initialIndex = i
 				initialStream = activeStreams[i]
 				break
 			}
@@ -470,17 +470,37 @@ func (s *Server) packControlBlocks(record *sessionRecord, first *serverStreamTXP
 		goto buildResult
 	}
 
-	for i, id := range activeIDs {
-		if id == initialID {
-			continue
-		}
-		if processID(id, activeStreams[i]) {
+	if hasOrphan && initialID != -1 {
+		if processID(-1, nil) {
 			goto buildResult
 		}
 	}
 
-	if initialID != -1 && hasOrphan {
-		processID(-1, nil)
+	if initialIndex >= 0 {
+		for i := initialIndex + 1; i < len(activeIDs); i++ {
+			if processID(activeIDs[i], activeStreams[i]) {
+				goto buildResult
+			}
+		}
+		for i := 0; i < initialIndex; i++ {
+			if processID(activeIDs[i], activeStreams[i]) {
+				goto buildResult
+			}
+		}
+	} else {
+		for i, id := range activeIDs {
+			if processID(id, activeStreams[i]) {
+				goto buildResult
+			}
+		}
+	}
+
+	if initialID == -1 && hasOrphan {
+		for i, id := range activeIDs {
+			if processID(id, activeStreams[i]) {
+				goto buildResult
+			}
+		}
 	}
 
 buildResult:

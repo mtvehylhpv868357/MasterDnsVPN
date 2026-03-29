@@ -62,6 +62,10 @@ type Stream_client struct {
 	ResolverResendStreak   int
 	LastResolverFailoverAt time.Time
 	HandshakeLastProgress  time.Time
+	CachedResolverPlan     []Connection
+	CachedResolverPlanFor  string
+	CachedResolverPlanSize int
+	CachedResolverVersion  uint64
 
 	resolverMu    sync.Mutex
 	txQueueMu     sync.Mutex

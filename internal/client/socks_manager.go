@@ -519,9 +519,8 @@ func (c *Client) sendSocksReply(conn net.Conn, rep byte, atyp byte, bndAddr net.
 
 func (c *Client) rejectSocksUDPAssociateUnsupportedTarget(conn net.Conn, targetAddr string, targetPort uint16) {
 	if c.log != nil {
-		c.log.Debugf("⚠️ <yellow>SOCKS5 UDP packet to unsupported target %s:%d rejected. Closing association.</yellow>", targetAddr, targetPort)
+		c.log.Debugf("⚠️ <yellow>SOCKS5 UDP packet to unsupported target %s:%d rejected (Only DNS/53 allowed).</yellow>", targetAddr, targetPort)
 	}
-	_ = c.sendSocksReply(conn, SOCKS5_REPLY_RULESET_DENIED, SOCKS5_ATYP_IPV4, net.IPv4zero, 0)
 }
 
 func (c *Client) handleSocksUDPAssociate(ctx context.Context, conn net.Conn, clientAddr string, clientPort uint16, atyp byte) {
@@ -601,7 +600,7 @@ func (c *Client) handleSocksUDPAssociate(ctx context.Context, conn net.Conn, cli
 
 		if targetPort != 53 {
 			c.rejectSocksUDPAssociateUnsupportedTarget(conn, targetAddr, targetPort)
-			return
+			continue
 		}
 
 		c.log.Infof("📡 <green>Received DNS Query from SOCKS5 UDP: <cyan>%d bytes</cyan>, Target: <cyan>%s:%d</cyan></green>", n-payloadOffset, targetAddr, targetPort)
