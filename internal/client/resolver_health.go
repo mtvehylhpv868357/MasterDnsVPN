@@ -121,8 +121,8 @@ func (c *Client) nextResolverHealthWait(now time.Time) time.Duration {
 		return clampResolverHealthWait(waitFor)
 	}
 
-	c.resolverHealthMu.Lock()
-	defer c.resolverHealthMu.Unlock()
+	c.resolverHealthMu.RLock()
+	defer c.resolverHealthMu.RUnlock()
 
 	for key, meta := range c.resolverRecheck {
 		conn, ok := c.GetConnectionByKey(key)
@@ -321,6 +321,9 @@ func (c *Client) disableResolverConnection(serverKey string, cause string) bool 
 	if !c.balancer.SetConnectionValidity(serverKey, false) {
 		return false
 	}
+	if refreshed, ok := c.GetConnectionByKey(serverKey); ok {
+		conn = refreshed
+	}
 
 	now := c.now()
 	nextAt := now.Add(maxDuration(5*time.Second, c.recheckServerInterval()*2))
@@ -385,6 +388,9 @@ func (c *Client) reactivateResolverConnection(serverKey string) bool {
 	}
 	if !c.balancer.SetConnectionValidity(serverKey, true) {
 		return false
+	}
+	if refreshed, ok := c.GetConnectionByKey(serverKey); ok {
+		conn = refreshed
 	}
 
 	c.resolverHealthMu.Lock()
@@ -533,8 +539,8 @@ func (c *Client) collectDueResolverRechecks(now time.Time) []resolverRecheckCand
 		return nil
 	}
 
-	c.resolverHealthMu.Lock()
-	defer c.resolverHealthMu.Unlock()
+	c.resolverHealthMu.RLock()
+	defer c.resolverHealthMu.RUnlock()
 
 	runtimeCandidates := make([]resolverRecheckCandidate, 0, len(c.runtimeDisabled))
 	normalCandidates := make([]resolverRecheckCandidate, 0, len(c.connections))
@@ -665,9 +671,9 @@ func (c *Client) isRuntimeDisabledResolver(serverKey string) bool {
 	if c == nil || serverKey == "" {
 		return false
 	}
-	c.resolverHealthMu.Lock()
+	c.resolverHealthMu.RLock()
 	_, ok := c.runtimeDisabled[serverKey]
-	c.resolverHealthMu.Unlock()
+	c.resolverHealthMu.RUnlock()
 	return ok
 }
 

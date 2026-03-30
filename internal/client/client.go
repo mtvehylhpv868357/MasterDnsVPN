@@ -46,9 +46,9 @@ type Client struct {
 	resolverConns       map[string]chan *net.UDPConn
 	resolverAddrMu      sync.RWMutex
 	resolverAddrCache   map[string]*net.UDPAddr
-	resolverStatsMu     sync.Mutex
+	resolverStatsMu     sync.RWMutex
 	resolverPending     map[resolverSampleKey]resolverSample
-	resolverHealthMu    sync.Mutex
+	resolverHealthMu    sync.RWMutex
 	resolverHealth      map[string]*resolverHealthState
 	resolverRecheck     map[string]resolverRecheckState
 	runtimeDisabled     map[string]resolverDisabledState
