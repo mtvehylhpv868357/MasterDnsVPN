@@ -233,6 +233,24 @@ func TestApplyPlannerNoConnectionPolicyRequeuesDataTask(t *testing.T) {
 	}
 }
 
+func TestRequiredWriterSlotsForFramesUsesSingleBatchSlot(t *testing.T) {
+	c := createTestClient(t)
+
+	frames := []encodedOutboundDatagram{
+		{serverKey: "a", packet: []byte("one")},
+		{serverKey: "b", packet: []byte("two")},
+		{serverKey: "c", packet: []byte("three")},
+	}
+
+	if got := c.requiredWriterSlotsForFrames(frames); got != 1 {
+		t.Fatalf("expected one writer queue slot for a multi-frame batch, got=%d", got)
+	}
+
+	if got := c.requiredWriterSlotsForFrames(nil); got != 0 {
+		t.Fatalf("expected zero writer queue slots for empty frames, got=%d", got)
+	}
+}
+
 func TestRequestSessionRestart(t *testing.T) {
 	c := createTestClient(t)
 	c.sessionResetSignal = make(chan struct{}, 1)

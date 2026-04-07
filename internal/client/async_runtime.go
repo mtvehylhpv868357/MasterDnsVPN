@@ -535,10 +535,6 @@ func (c *Client) asyncPlanEncodeWorker(ctx context.Context, id int) {
 				continue
 			}
 
-			if !c.waitForWriterCapacity(ctx, task, len(conns)) {
-				return
-			}
-
 			frames, err = c.buildPlannedOutboundFrames(task, conns, defaultDomain, packetByDomain, preparedDomainByName, frames)
 			if err != nil {
 				if !task.wasPacked && task.selected != nil {
@@ -552,6 +548,10 @@ func (c *Client) asyncPlanEncodeWorker(ctx context.Context, id int) {
 					task.selected.ReleaseTXPacket(task.item)
 				}
 				continue
+			}
+
+			if !c.waitForWriterCapacity(ctx, task, frames) {
+				return
 			}
 
 			encodedTask := writerTask{
@@ -615,10 +615,22 @@ func (c *Client) releasePlannerTask(task plannerTask) {
 	}
 }
 
-func (c *Client) waitForWriterCapacity(ctx context.Context, task plannerTask, requiredWriterSlots int) bool {
-	if requiredWriterSlots < 1 {
-		requiredWriterSlots = 1
+func (c *Client) requiredWriterSlotsForFrames(frames []encodedOutboundDatagram) int {
+	if len(frames) == 0 {
+		return 0
 	}
+	// The writer queue is a queue of writerTask batches, not individual datagrams.
+	// A planner task with N duplications/fan-out frames still occupies one writer
+	// queue slot because all frames are flushed together by a single writer worker.
+	return 1
+}
+
+func (c *Client) waitForWriterCapacity(ctx context.Context, task plannerTask, frames []encodedOutboundDatagram) bool {
+	requiredWriterSlots := c.requiredWriterSlotsForFrames(frames)
+	if requiredWriterSlots < 1 {
+		return true
+	}
+
 	for !c.encodedTXChannelHasCapacity(requiredWriterSlots) {
 		select {
 		case <-ctx.Done():
