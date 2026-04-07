@@ -567,7 +567,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/$EXECUTABLE
+ExecStart=$INSTALL_DIR/$EXECUTABLE -nowait
 Restart=always
 RestartSec=3
 User=root
