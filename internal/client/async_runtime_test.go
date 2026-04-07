@@ -379,12 +379,19 @@ func TestResolverHealthLoopCollectsResolverTimeoutsWhenAutoDisableEnabled(t *tes
 		dnsID:        0x1337,
 	}
 
-	c.balancer.mu.Lock()
+	c.balancer.SetAutoDisableConfig(
+		true,
+		180*time.Second,
+		3*time.Second,
+		1,
+	)
+
+	c.balancer.pendingMu.Lock()
 	c.balancer.pending[key] = balancerResolverSample{
 		serverKey: serverKey,
 		sentAt:    now.Add(-10 * time.Second),
 	}
-	c.balancer.mu.Unlock()
+	c.balancer.pendingMu.Unlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -392,9 +399,9 @@ func TestResolverHealthLoopCollectsResolverTimeoutsWhenAutoDisableEnabled(t *tes
 	go c.runResolverHealthLoop(ctx)
 
 	waitForResolverHealthCondition(t, 3*time.Second, func() bool {
-		c.balancer.mu.RLock()
+		c.balancer.pendingMu.Lock()
 		sample, ok := c.balancer.pending[key]
-		c.balancer.mu.RUnlock()
+		c.balancer.pendingMu.Unlock()
 		return ok && sample.timedOut
 	}, "expected resolver timeout sample to be collected when auto-disable is enabled")
 }
