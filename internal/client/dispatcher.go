@@ -9,7 +9,7 @@ package client
 
 import (
 	"context"
-	"sort"
+	"slices"
 	"time"
 
 	"masterdnsvpn-go/internal/arq"
@@ -71,6 +71,7 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 				default:
 				}
 			}
+
 			idleTimer.Reset(idlePoll)
 		}
 	}
@@ -87,7 +88,7 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 				streams[id] = stream
 			}
 			c.streamsMu.RUnlock()
-			sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+			slices.Sort(ids)
 			cachedIDs = ids
 			cachedStreams = streams
 			cachedVersion = currentVersion
@@ -121,6 +122,7 @@ func (c *Client) asyncStreamDispatcher(ctx context.Context) {
 				break
 			}
 		}
+
 		if startIndex == -1 {
 			startIndex = 0
 		}

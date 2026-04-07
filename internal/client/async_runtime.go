@@ -185,9 +185,11 @@ func (c *Client) plannerQueueHasCapacity(needed int) bool {
 	if c == nil || c.plannerQueue == nil {
 		return false
 	}
+
 	if needed <= 0 {
 		needed = 1
 	}
+
 	return cap(c.plannerQueue)-len(c.plannerQueue) >= needed
 }
 
@@ -547,6 +549,7 @@ func (c *Client) asyncPlanEncodeWorker(ctx context.Context, id int) {
 				conns []Connection
 				err   error
 			)
+
 			conns, err = c.balancer.SelectTargets(task.opts.PacketType, task.opts.StreamID, targetCount)
 			if err != nil {
 				conns = nil
@@ -683,12 +686,15 @@ func (c *Client) buildPlannedOutboundFrames(
 		firstDomain    string
 		firstDNSPacket []byte
 	)
+
 	if packetByDomain != nil {
 		clear(packetByDomain)
 	}
+
 	if preparedDomainByName != nil {
 		clear(preparedDomainByName)
 	}
+
 	frames = frames[:0]
 
 	for _, resolverConn := range conns {
@@ -717,7 +723,7 @@ func (c *Client) buildPlannedOutboundFrames(
 		var dnsPacket []byte
 		switch {
 		case firstDNSPacket == nil:
-			dnsPacket, err = buildTunnelTXTQuestionBytesPrepared(prepared, encoded)
+			dnsPacket, err = DnsParser.BuildTunnelTXTQuestionPacketPrepared(prepared.normalized, prepared.qname, encoded, Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
 			if err != nil {
 				continue
 			}
@@ -732,7 +738,7 @@ func (c *Client) buildPlannedOutboundFrames(
 			var cached bool
 			dnsPacket, cached = packetByDomain[domain]
 			if !cached {
-				dnsPacket, err = buildTunnelTXTQuestionBytesPrepared(prepared, encoded)
+				dnsPacket, err = DnsParser.BuildTunnelTXTQuestionPacketPrepared(prepared.normalized, prepared.qname, encoded, Enums.DNS_RECORD_TYPE_TXT, EDnsSafeUDPSize)
 				if err != nil {
 					continue
 				}
@@ -927,7 +933,7 @@ func (c *Client) handleInboundPacket(data []byte, addr *net.UDPAddr, localAddr s
 
 	// 4. Dispatch to Packet Handlers via Registry
 	if err := handlers.Dispatch(c, vpnPacket, addr); err != nil {
-		c.log.Warnf("\U0001F6A8 <red>Handler execution failed: %v</red>", err)
+		c.log.Debugf("\U0001F6A8 <red>Handler execution failed: %v</red>", err)
 	}
 
 }

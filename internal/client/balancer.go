@@ -50,8 +50,6 @@ type balancerStreamRouteState struct {
 	PreferredResolverKey string
 	ResendStreak         int
 	LastFailoverAt       time.Time
-	CachedTargetKeys     []string
-	CachedRequiredCount  int
 }
 
 type balancerResolverSampleKey struct {
@@ -74,10 +72,10 @@ type balancerTimeoutObservation struct {
 }
 
 type Balancer struct {
-	strategy        int
-	rrCounter       atomic.Uint64
-	healthRRCounter atomic.Uint64
-	rngState        atomic.Uint64
+	strategy         int
+	rrCounter        atomic.Uint64
+	healthRRCounter  atomic.Uint64
+	rngState         atomic.Uint64
 	nextPendingSweep atomic.Int64
 
 	mu           sync.RWMutex
@@ -621,41 +619,6 @@ func (b *Balancer) GetBestConnectionExcluding(excludeKey string) (Connection, bo
 	}
 }
 
-func (b *Balancer) GetUniqueConnections(requiredCount int) []Connection {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-
-	count := normalizeRequiredCount(len(b.activeIDs), requiredCount, 1)
-	if count <= 0 {
-		return nil
-	}
-
-	if count == 1 {
-		best, ok := b.getBestConnectionLocked()
-		if !ok {
-			return nil
-		}
-		return []Connection{best}
-	}
-
-	switch b.strategy {
-	case BalancingRandom:
-		return b.selectRandomLocked(count)
-	case BalancingLeastLoss:
-		if !b.hasLossSignalLocked() {
-			return b.selectRoundRobinLocked(count)
-		}
-		return b.selectLowestScoreLocked(count, b.lossScoreLocked)
-	case BalancingLowestLatency:
-		if !b.hasLatencySignalLocked() {
-			return b.selectRoundRobinLocked(count)
-		}
-		return b.selectLowestScoreLocked(count, b.latencyScoreLocked)
-	default:
-		return b.selectRoundRobinLocked(count)
-	}
-}
-
 func (b *Balancer) ActiveConnections() []Connection {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -749,12 +712,14 @@ func (b *Balancer) SelectTargets(packetType uint8, streamID uint16, requiredCoun
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
+	// 1. Normalize count: 1 <= requiredCount <= len(activeIDs)
 	requiredCount = normalizeRequiredCount(len(b.activeIDs), requiredCount, 1)
 	if requiredCount <= 0 {
 		return nil, ErrNoValidConnections
 	}
 
-	if !isBalancerStreamDataLike(packetType) || streamID == 0 {
+	// 2. Base case: Single target or non-stream packet is ALWAYS dynamic via balancer
+	if requiredCount == 1 || streamID == 0 || !isBalancerStreamDataLike(packetType) {
 		selected := b.getUniqueConnectionsLocked(requiredCount)
 		if len(selected) == 0 {
 			return nil, ErrNoValidConnections
@@ -762,51 +727,31 @@ func (b *Balancer) SelectTargets(packetType uint8, streamID uint16, requiredCoun
 		return selected, nil
 	}
 
+	// 3. Duplication case: Multi-path stream routing (Preferred + Dynamic Others)
 	state := b.streamRoutes[streamID]
 	if state == nil {
-		selected := b.getUniqueConnectionsLocked(requiredCount)
-		if len(selected) == 0 {
-			return nil, ErrNoValidConnections
-		}
-		return selected, nil
+		// No state? Fallback to dynamic balancer
+		return b.getUniqueConnectionsLocked(requiredCount), nil
 	}
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
+	// Get the sticky preferred resolver for the main path
 	preferred, ok := b.selectPreferredConnectionForStreamLocked(packetType, state)
 	if !ok {
-		selected := b.getUniqueConnectionsLocked(requiredCount)
-		if len(selected) == 0 {
-			return nil, ErrNoValidConnections
-		}
-		return selected, nil
+		return b.getUniqueConnectionsLocked(requiredCount), nil
 	}
 
-	if requiredCount <= 1 {
-		return []Connection{preferred}, nil
-	}
-
-	if cached, ok := b.cachedTargetsForStreamLocked(state, preferred.Key, requiredCount); ok {
-		return cached, nil
-	}
-
+	// Combine Preferred + Dynamic Others
 	selected := make([]Connection, 0, requiredCount)
 	selected = append(selected, preferred)
-	for _, conn := range b.getUniqueConnectionsLocked(requiredCount) {
-		if !conn.IsValid || conn.Key == "" || conn.Key == preferred.Key {
-			continue
-		}
-		selected = append(selected, conn)
-		if len(selected) >= requiredCount {
-			break
-		}
+
+	if remaining := requiredCount - 1; remaining > 0 {
+		others := b.getUniqueConnectionsExcludingLocked(remaining, preferred.Key)
+		selected = append(selected, others...)
 	}
 
-	if len(selected) == 0 {
-		return nil, ErrNoValidConnections
-	}
-	b.cacheTargetsForStreamLocked(state, selected)
 	return selected, nil
 }
 
@@ -842,11 +787,14 @@ func (b *Balancer) ensureStreamRouteLocked(streamID uint16) *balancerStreamRoute
 	if streamID == 0 {
 		return nil
 	}
+
 	state := b.streamRoutes[streamID]
+
 	if state == nil {
 		state = &balancerStreamRouteState{}
 		b.streamRoutes[streamID] = state
 	}
+
 	return state
 }
 
@@ -859,38 +807,50 @@ func (b *Balancer) selectPreferredConnectionForStreamLocked(packetType uint8, st
 		return Connection{}, false
 	}
 
+	// 1. Check for Failover (Streak reached during resend)
 	if packetType == Enums.PACKET_STREAM_RESEND {
 		state.ResendStreak++
 		if current, ok := b.validPreferredConnectionLocked(state); ok {
-			if state.ResendStreak < b.streamFailoverThreshold {
+			// Stay on current until threshold or cooldown
+			if state.ResendStreak < b.streamFailoverThreshold || (time.Since(state.LastFailoverAt) < b.streamFailoverCooldown) {
 				return current, true
 			}
-			if !state.LastFailoverAt.IsZero() && time.Since(state.LastFailoverAt) < b.streamFailoverCooldown {
-				return current, true
-			}
+
+			// Failover triggered: Choose absolute best alternate
 			if replacement, ok := b.selectAlternateConnectionLocked(current.Key); ok {
 				state.PreferredResolverKey = replacement.Key
 				state.ResendStreak = 0
 				state.LastFailoverAt = time.Now()
-				b.clearCachedTargetsForStreamLocked(state)
 				return replacement, true
 			}
 			return current, true
 		}
 	}
 
+	// 2. Return current preferred if it is still valid
 	if current, ok := b.validPreferredConnectionLocked(state); ok {
 		return current, true
 	}
 
-	replacement, ok := b.selectAlternateConnectionLocked(state.PreferredResolverKey)
-	if !ok {
-		return Connection{}, false
+	// 3. Current is dead or missing: Select a new one
+	var replacement Connection
+	var ok bool
+
+	if state.PreferredResolverKey == "" {
+		// New stream: Use "Top 10 Random" to distribute load
+		replacement, ok = b.selectInitialPreferredConnectionLocked()
+	} else {
+		// Recovery from dead resolver: Use absolute best alternate
+		replacement, ok = b.selectAlternateConnectionLocked(state.PreferredResolverKey)
 	}
-	state.PreferredResolverKey = replacement.Key
-	state.ResendStreak = 0
-	b.clearCachedTargetsForStreamLocked(state)
-	return replacement, true
+
+	if ok {
+		state.PreferredResolverKey = replacement.Key
+		state.ResendStreak = 0
+		return replacement, true
+	}
+
+	return Connection{}, false
 }
 
 func (b *Balancer) validPreferredConnectionLocked(state *balancerStreamRouteState) (Connection, bool) {
@@ -934,7 +894,6 @@ func (b *Balancer) clearPreferredResolverReferencesLocked(serverKey string) {
 		}
 		state.PreferredResolverKey = ""
 		state.ResendStreak = 0
-		b.clearCachedTargetsForStreamLocked(state)
 	}
 }
 
@@ -948,64 +907,56 @@ func (b *Balancer) moveConnectionStateLocked(idx int, valid bool) {
 	b.addInactiveIndexLocked(idx)
 }
 
-func (b *Balancer) clearCachedTargetsForStreamLocked(state *balancerStreamRouteState) {
-	if state == nil {
-		return
+func (b *Balancer) selectInitialPreferredConnectionLocked() (Connection, bool) {
+	if len(b.activeIDs) == 0 {
+		return Connection{}, false
 	}
 
-	state.CachedTargetKeys = nil
-	state.CachedRequiredCount = 0
+	switch b.strategy {
+	case BalancingRandom, BalancingRoundRobin, BalancingRoundRobinDefault:
+		return b.selectTargetByStrategyLocked()
+	}
+
+	var scorer func(int) uint64
+	switch b.strategy {
+	case BalancingLeastLoss:
+		scorer = b.lossScoreLocked
+	case BalancingLowestLatency:
+		scorer = b.latencyScoreLocked
+	default:
+		return b.selectTargetByStrategyLocked()
+	}
+
+	topN := 10
+	if len(b.activeIDs) < topN {
+		topN = len(b.activeIDs)
+	}
+
+	pool := b.selectLowestScoreLocked(topN, scorer)
+	if len(pool) == 0 {
+		return b.selectTargetByStrategyLocked()
+	}
+
+	return pool[b.nextRandom()%uint64(len(pool))], true
 }
 
-func (b *Balancer) cacheTargetsForStreamLocked(state *balancerStreamRouteState, selected []Connection) {
-	if state == nil || len(selected) <= 1 {
-		b.clearCachedTargetsForStreamLocked(state)
-		return
+func (b *Balancer) getUniqueConnectionsExcludingLocked(requiredCount int, excludeKey string) []Connection {
+	if requiredCount <= 0 || len(b.activeIDs) == 0 {
+		return nil
 	}
 
-	keys := make([]string, 0, len(selected))
-
-	for _, conn := range selected {
-		if conn.Key == "" || !conn.IsValid {
-			b.clearCachedTargetsForStreamLocked(state)
-			return
-		}
-		keys = append(keys, conn.Key)
-	}
-
-	state.CachedTargetKeys = keys
-	state.CachedRequiredCount = len(keys)
-}
-
-func (b *Balancer) cachedTargetsForStreamLocked(state *balancerStreamRouteState, preferredKey string, requiredCount int) ([]Connection, bool) {
-	if state == nil || requiredCount <= 1 {
-		return nil, false
-	}
-	if state.CachedRequiredCount != requiredCount || len(state.CachedTargetKeys) != requiredCount {
-		return nil, false
-	}
-	if len(state.CachedTargetKeys) == 0 || state.CachedTargetKeys[0] != preferredKey {
-		return nil, false
-	}
+	all := b.getUniqueConnectionsLocked(requiredCount + 1)
 	selected := make([]Connection, 0, requiredCount)
-	seen := make(map[string]struct{}, requiredCount)
-	for _, key := range state.CachedTargetKeys {
-		conn, ok := b.connectionByKeyLocked(key)
-		if !ok || !conn.IsValid || conn.Key == "" {
-			return nil, false
+	for _, conn := range all {
+		if conn.Key == excludeKey {
+			continue
 		}
-		if _, exists := seen[conn.Key]; exists {
-			return nil, false
+		selected = append(selected, conn)
+		if len(selected) >= requiredCount {
+			break
 		}
-		seen[conn.Key] = struct{}{}
-		selected = append(selected, *conn)
 	}
-
-	if len(selected) != requiredCount {
-		return nil, false
-	}
-
-	return selected, true
+	return selected
 }
 
 func (b *Balancer) addActiveIndexLocked(idx int) {
@@ -1103,12 +1054,15 @@ func normalizeRequiredCount(validCount, requiredCount, defaultIfInvalid int) int
 	if validCount <= 0 {
 		return 0
 	}
+
 	if requiredCount <= 0 {
 		requiredCount = defaultIfInvalid
 	}
+
 	if requiredCount > validCount {
 		return validCount
 	}
+
 	return requiredCount
 }
 
@@ -1293,14 +1247,6 @@ func (b *Balancer) getUniqueConnectionsLocked(requiredCount int) []Connection {
 		return nil
 	}
 
-	if count == 1 {
-		best, ok := b.getBestConnectionLocked()
-		if !ok {
-			return nil
-		}
-		return []Connection{best}
-	}
-
 	switch b.strategy {
 	case BalancingRandom:
 		return b.selectRandomLocked(count)
@@ -1319,24 +1265,12 @@ func (b *Balancer) getUniqueConnectionsLocked(requiredCount int) []Connection {
 	}
 }
 
-func (b *Balancer) getBestConnectionLocked() (Connection, bool) {
-	switch b.strategy {
-	case BalancingRandom:
-		idx := b.activeIDs[b.nextRandom()%uint64(len(b.activeIDs))]
-		return b.connections[idx], true
-	case BalancingLeastLoss:
-		if !b.hasLossSignalLocked() {
-			return b.roundRobinBestConnectionLocked()
-		}
-		return b.bestScoredConnectionLocked(b.lossScoreLocked)
-	case BalancingLowestLatency:
-		if !b.hasLatencySignalLocked() {
-			return b.roundRobinBestConnectionLocked()
-		}
-		return b.bestScoredConnectionLocked(b.latencyScoreLocked)
-	default:
-		return b.roundRobinBestConnectionLocked()
+func (b *Balancer) selectTargetByStrategyLocked() (Connection, bool) {
+	selected := b.getUniqueConnectionsLocked(1)
+	if len(selected) == 0 {
+		return Connection{}, false
 	}
+	return selected[0], true
 }
 
 func (b *Balancer) getBestConnectionExcludingLocked(excludeKey string) (Connection, bool) {
