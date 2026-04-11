@@ -88,6 +88,7 @@ type request struct {
 	buf  []byte
 	size int
 	addr *net.UDPAddr
+	conn *net.UDPConn
 }
 
 type postSessionValidation struct {
@@ -266,25 +267,23 @@ func (s *Server) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{
-		IP:   net.ParseIP(s.cfg.UDPHost),
-		Port: s.cfg.UDPPort,
-	})
-
+	conns, err := s.openUDPListeners()
 	if err != nil {
 		return err
 	}
-
-	defer conn.Close()
-
-	s.configureSocketBuffers(conn)
+	defer func() {
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	}()
 
 	s.log.Infof(
-		"\U0001F4E1 <green>UDP Listener Ready, Addr: <cyan>%s</cyan>, Readers: <cyan>%d</cyan>, Workers: <cyan>%d</cyan>, Queue: <cyan>%d</cyan></green>",
+		"\U0001F4E1 <green>UDP Listener Ready, Addr: <cyan>%s</cyan>, Readers: <cyan>%d</cyan>, Workers: <cyan>%d</cyan>, Queue: <cyan>%d</cyan>, Sockets: <cyan>%d</cyan></green>",
 		s.cfg.Address(),
 		s.cfg.EffectiveUDPReaders(),
 		s.cfg.EffectiveDNSRequestWorkers(),
 		s.cfg.EffectiveMaxConcurrentRequests(),
+		len(conns),
 	)
 
 	reqCh := make(chan request, s.cfg.EffectiveMaxConcurrentRequests())
@@ -298,16 +297,18 @@ func (s *Server) Run(ctx context.Context) error {
 
 	s.deferredDNSSession.Start(runCtx)
 	s.deferredConnectSession.Start(runCtx)
-	s.startDNSWorkers(runCtx, conn, reqCh, &workerWG)
+	s.startDNSWorkers(runCtx, conns[0], reqCh, &workerWG)
 
 	go func() {
 		<-runCtx.Done()
-		_ = conn.Close()
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
 	}()
 
-	readErrCh := make(chan error, s.cfg.EffectiveUDPReaders())
+	readErrCh := make(chan error, max(1, len(conns)))
 	var readerWG sync.WaitGroup
-	s.startReaders(runCtx, conn, reqCh, readErrCh, &readerWG)
+	s.startReaders(runCtx, conns, reqCh, readErrCh, &readerWG)
 
 	readerWG.Wait()
 	close(reqCh)
