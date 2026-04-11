@@ -2562,7 +2562,6 @@ func (a *ARQ) handleTerminalRetransmitState(now time.Time) bool {
 
 func (a *ARQ) checkControlRetransmits(now time.Time) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	for key, info := range a.controlSndBuf {
 		if info.TTL > 0 {
@@ -2570,7 +2569,6 @@ func (a *ARQ) checkControlRetransmits(now time.Time) {
 				delete(a.controlSndBuf, key)
 				a.mu.Unlock()
 				a.handleTrackedPacketTTLExpiry(info.PacketType, "Packet TTL expired")
-				a.mu.Lock()
 				return
 			}
 		} else {
@@ -2596,7 +2594,6 @@ func (a *ARQ) checkControlRetransmits(now time.Time) {
 				}
 				a.mu.Unlock()
 				a.handleTrackedPacketTTLExpiry(info.PacketType, reason)
-				a.mu.Lock()
 				return
 			}
 		}
@@ -2632,6 +2629,7 @@ func (a *ARQ) checkControlRetransmits(now time.Time) {
 		grownRTO := time.Duration(float64(info.CurrentRTO) * growth)
 		info.CurrentRTO = clampDuration(grownRTO, floorRto, a.controlMaxRto)
 	}
+	a.mu.Unlock()
 }
 
 // ---------------------------------------------------------------------
