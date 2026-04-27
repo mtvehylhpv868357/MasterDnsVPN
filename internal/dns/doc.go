@@ -1,21 +1,20 @@
-// Package dns provides DNS resolution utilities for MasterDnsVPN.
+// Package dns provides building blocks for a DNS proxy / VPN gateway.
 //
-// It includes a thread-safe in-memory cache with TTL-based expiry
-// and a configurable resolver that supports upstream DNS servers,
-// retry logic, and optional caching.
+// # Components
 //
-// Basic usage:
+//   - Cache      – in-memory TTL-aware record cache.
+//   - HostsTable – static /etc/hosts-style override table.
+//   - Resolver   – ties cache, hosts, and upstream together into a single
+//     query entry-point.
+//   - UpstreamClient – thin wrapper around a single upstream DNS server.
+//   - Forwarder  – fan-out / retry logic across multiple UpstreamClients.
+//   - Middleware  – composable Handler chain (logging, recovery, …).
 //
-//	cfg := dns.DefaultResolverConfig()
-//	cfg.UpstreamDNS = "1.1.1.1:53"
-//	cfg.CacheTTL = 120 * time.Second
+// # Typical usage
 //
-//	r := dns.NewResolver(cfg)
-//	ips, err := r.Resolve("example.com")
-//	if err != nil {
-//	    log.Fatal(err)
-//	}
-//	for _, ip := range ips {
-//	    fmt.Println(ip)
-//	}
+//	cache   := dns.NewCache(dns.DefaultCacheConfig())
+//	hosts,_ := dns.NewHostsTable("/etc/hosts")
+//	upstream,_ := dns.NewUpstreamClient(dns.DefaultUpstreamConfig())
+//	fwd,_   := dns.NewForwarder(dns.DefaultForwarderConfig(), upstream)
+//	_ = fwd // pass to your server handler
 package dns
