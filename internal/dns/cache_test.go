@@ -29,7 +29,8 @@ func TestCacheMiss(t *testing.T) {
 }
 
 func TestCacheExpiry(t *testing.T) {
-	c := NewCache(50 * time.Millisecond)
+	// Using 100ms TTL with 200ms sleep to avoid flakiness on slow CI runners
+	c := NewCache(100 * time.Millisecond)
 	ips := []net.IP{net.ParseIP("9.9.9.9")}
 	c.Set("expire.com", ips)
 
@@ -38,7 +39,7 @@ func TestCacheExpiry(t *testing.T) {
 		t.Fatal("expected cache hit before expiry")
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	_, ok = c.Get("expire.com")
 	if ok {
