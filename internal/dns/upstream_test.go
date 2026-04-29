@@ -56,9 +56,11 @@ func TestUpstreamQueryNilMessage(t *testing.T) {
 	}
 }
 
+// TestUpstreamQueryNameBuildsMsgCorrectly verifies that QueryName constructs a
+// valid DNS message and attempts to send it. Uses RFC 5737 TEST-NET (192.0.2.0/24)
+// as the upstream address so no real network traffic is generated.
+// Timeout is kept short (200ms) to avoid slowing down the test suite.
 func TestUpstreamQueryNameBuildsMsgCorrectly(t *testing.T) {
-	// We only verify that QueryName constructs and attempts to send a valid
-	// message; we use a deliberately unreachable server to avoid network calls.
 	cfg := UpstreamConfig{
 		Address: "192.0.2.1", // TEST-NET, should not be routable
 		Port:    53,
