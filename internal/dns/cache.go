@@ -64,8 +64,11 @@ func (c *Cache) Size() int {
 	return len(c.entries)
 }
 
+// evictLoop runs a background goroutine to periodically remove expired entries.
+// Using ttl as the tick interval instead of ttl/2 to reduce lock contention
+// on high-traffic setups — expired entries are already filtered out in Get().
 func (c *Cache) evictLoop() {
-	ticker := time.NewTicker(c.ttl / 2)
+	ticker := time.NewTicker(c.ttl)
 	defer ticker.Stop()
 	for range ticker.C {
 		now := time.Now()
