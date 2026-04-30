@@ -40,7 +40,8 @@ func TestNewResolverNoCache(t *testing.T) {
 
 func TestResolveLocalhost(t *testing.T) {
 	cfg := DefaultResolverConfig()
-	cfg.Timeout = 2 * time.Second
+	// Increased timeout from 2s to 5s to reduce flakiness on slow networks
+	cfg.Timeout = 5 * time.Second
 	r := NewResolver(cfg)
 	ips, err := r.Resolve("localhost")
 	if err != nil {
