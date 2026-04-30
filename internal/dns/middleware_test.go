@@ -49,6 +49,11 @@ func TestChain(t *testing.T) {
 	inner := HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) { order = append(order, "inner") })
 	h := Chain(inner, mk("first"), mk("second"))
 	h.ServeDNS(&mockResponseWriter{}, newTestMsg())
+	// Middlewares should execute in the order they are passed to Chain,
+	// with the inner handler running last.
+	if len(order) != 3 {
+		t.Fatalf("expected 3 entries in order, got %d: %v", len(order), order)
+	}
 	if order[0] != "first" || order[1] != "second" || order[2] != "inner" {
 		t.Errorf("unexpected chain order: %v", order)
 	}
