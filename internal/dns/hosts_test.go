@@ -42,6 +42,8 @@ func TestHostsTableLoadFile(t *testing.T) {
 	if err := h.LoadFile(path); err != nil {
 		t.Fatalf("LoadFile error: %v", err)
 	}
+	// Expecting 4 entries: localhost, router, gateway, localhost6
+	// (blank lines and comments are ignored)
 	if h.Len() != 4 {
 		t.Errorf("expected 4 entries, got %d", h.Len())
 	}
@@ -58,7 +60,8 @@ func TestHostsTableLookup(t *testing.T) {
 		t.Errorf("expected 127.0.0.1, got %v", ip)
 	}
 
-	ip = h.Lookup("VPN.INTERNAL") // case-insensitive
+	// Lookup should be case-insensitive
+	ip = h.Lookup("VPN.INTERNAL")
 	if ip == nil || ip.String() != "10.0.0.1" {
 		t.Errorf("expected 10.0.0.1, got %v", ip)
 	}
@@ -84,5 +87,17 @@ func TestHostsTableLoadFileNotFound(t *testing.T) {
 	h := NewHostsTable()
 	if err := h.LoadFile("/nonexistent/path/hosts"); err == nil {
 		t.Error("expected error for missing file, got nil")
+	}
+}
+
+// TestHostsTableSetOverwrite verifies that calling Set on an existing
+// hostname correctly overwrites the previously stored IP address.
+func TestHostsTableSetOverwrite(t *testing.T) {
+	h := NewHostsTable()
+	h.Set("myhost", net.ParseIP("10.0.0.1"))
+	h.Set("myhost", net.ParseIP("10.0.0.2"))
+	ip := h.Lookup("myhost")
+	if ip == nil || ip.String() != "10.0.0.2" {
+		t.Errorf("expected 10.0.0.2 after overwrite, got %v", ip)
 	}
 }
