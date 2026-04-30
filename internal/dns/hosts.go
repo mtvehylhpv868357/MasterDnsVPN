@@ -24,6 +24,7 @@ func NewHostsTable() *HostsTable {
 // LoadFile parses a hosts-format file and populates the table.
 // Lines starting with '#' and blank lines are ignored.
 // Each valid line has the form: <ip> <hostname> [aliases...]
+// Note: calling LoadFile replaces all existing entries atomically.
 func (h *HostsTable) LoadFile(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -65,6 +66,7 @@ func (h *HostsTable) LoadFile(path string) error {
 }
 
 // Lookup returns the IP for the given hostname, or nil if not found.
+// The hostname is normalized to lowercase before lookup.
 func (h *HostsTable) Lookup(hostname string) net.IP {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -75,6 +77,13 @@ func (h *HostsTable) Lookup(hostname string) net.IP {
 func (h *HostsTable) Set(hostname string, ip net.IP) {
 	h.mu.Lock()
 	h.entries[strings.ToLower(hostname)] = ip
+	h.mu.Unlock()
+}
+
+// Delete removes an entry from the table if it exists.
+func (h *HostsTable) Delete(hostname string) {
+	h.mu.Lock()
+	delete(h.entries, strings.ToLower(hostname))
 	h.mu.Unlock()
 }
 
